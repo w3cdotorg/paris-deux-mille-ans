@@ -49,25 +49,30 @@ export function lifecycle(
     return { phase: "absent", presence: 0 };
   }
 
+  // Death takes precedence: check if we're razing/gone
+  if (year >= died) {
+    if (year < razeEnd) {
+      // Razing phase: presence was up to 1, now decreases to 0
+      // If death occurred during build, presence at death = progress at that time
+      const buildProgress = (died - born) / buildYears;
+      const presenceAtDeath = Math.max(0, Math.min(buildProgress, 1));
+      const presence = presenceAtDeath * (1 - (year - died) / razeYears);
+      return { phase: "razing", presence };
+    } else {
+      // Gone phase: no longer present
+      return { phase: "gone", presence: 0 };
+    }
+  }
+
+  // Now we know year < died
   if (year < buildEnd) {
     // Building phase: presence increases from 0 to 1
     const presence = (year - born) / buildYears;
     return { phase: "building", presence };
   }
 
-  if (year < died) {
-    // Alive phase: fully present
-    return { phase: "alive", presence: 1 };
-  }
-
-  if (year < razeEnd) {
-    // Razing phase: presence decreases from 1 to 0
-    const presence = 1 - (year - died) / razeYears;
-    return { phase: "razing", presence };
-  }
-
-  // Gone phase: no longer present
-  return { phase: "gone", presence: 0 };
+  // Alive phase: fully present
+  return { phase: "alive", presence: 1 };
 }
 
 /**
@@ -121,6 +126,11 @@ export function momentBlend(year, anchors) {
 export function sliderToYear(u, anchors) {
   const n = anchors.length;
 
+  // Special case: single anchor returns that anchor for any u
+  if (n === 1) {
+    return anchors[0];
+  }
+
   // Clamp u to [0, 1]
   u = Math.max(0, Math.min(1, u));
 
@@ -141,6 +151,11 @@ export function sliderToYear(u, anchors) {
  */
 export function yearToSlider(year, anchors) {
   const n = anchors.length;
+
+  // Special case: single anchor returns 0 for any year
+  if (n === 1) {
+    return 0;
+  }
 
   // Clamp year to valid range
   year = Math.max(anchors[0], Math.min(anchors[n - 1], year));

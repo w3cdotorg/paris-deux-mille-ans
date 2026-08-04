@@ -101,6 +101,60 @@ test("lifecycle: default razeYears is 5", () => {
   assert.deepStrictEqual(result1, result2);
 });
 
+test("lifecycle: born===died (object built and destroyed instantly)", () => {
+  // At exactly birth/death: razing with presence 0
+  const result1 = lifecycle(1190, { born: 1190, died: 1190, buildYears: 10, razeYears: 5 });
+  assert.strictEqual(result1.phase, "razing");
+  assert.strictEqual(result1.presence, 0);
+
+  // During razing window: razing with presence 0
+  const result2 = lifecycle(1192, { born: 1190, died: 1190, buildYears: 10, razeYears: 5 });
+  assert.strictEqual(result2.phase, "razing");
+  assert.strictEqual(result2.presence, 0);
+
+  // After razing: gone with presence 0
+  const result3 = lifecycle(1195, { born: 1190, died: 1190, buildYears: 10, razeYears: 5 });
+  assert.strictEqual(result3.phase, "gone");
+  assert.strictEqual(result3.presence, 0);
+});
+
+test("lifecycle: death during build window (died < buildEnd)", () => {
+  // born=1190, buildEnd=1200, died=1195, razeEnd=1200
+
+  // Before death, during build: building phase
+  const result1 = lifecycle(1192, { born: 1190, died: 1195, buildYears: 10, razeYears: 5 });
+  assert.strictEqual(result1.phase, "building");
+  assert.strictEqual(result1.presence, 0.2); // (1192-1190)/10 = 2/10
+
+  // At death: razing with presence = build progress at death = 0.5
+  const result2 = lifecycle(1195, { born: 1190, died: 1195, buildYears: 10, razeYears: 5 });
+  assert.strictEqual(result2.phase, "razing");
+  assert.strictEqual(result2.presence, 0.5); // 0.5 * (1 - 0/5)
+
+  // Mid-razing: razing with presence decreasing
+  const result3 = lifecycle(1197, { born: 1190, died: 1195, buildYears: 10, razeYears: 5 });
+  assert.strictEqual(result3.phase, "razing");
+  assert.strictEqual(result3.presence, 0.3); // 0.5 * (1 - 2/5)
+
+  // After razing: gone
+  const result4 = lifecycle(1200, { born: 1190, died: 1195, buildYears: 10, razeYears: 5 });
+  assert.strictEqual(result4.phase, "gone");
+  assert.strictEqual(result4.presence, 0);
+});
+
+test("lifecycle: death at exact birth boundary", () => {
+  // born=1190, died=1190, razeEnd=1195 (death at birth)
+  // Before birth: absent
+  const result1 = lifecycle(1189, { born: 1190, died: 1190, buildYears: 10, razeYears: 5 });
+  assert.strictEqual(result1.phase, "absent");
+  assert.strictEqual(result1.presence, 0);
+
+  // At/after birth: razing (died immediately at birth, never built)
+  const result2 = lifecycle(1190, { born: 1190, died: 1190, buildYears: 10, razeYears: 5 });
+  assert.strictEqual(result2.phase, "razing");
+  assert.strictEqual(result2.presence, 0);
+});
+
 // ============================================================================
 // momentBlend tests
 // ============================================================================
@@ -231,4 +285,33 @@ test("sliderToYear: between two segments on equal timeline", () => {
   // At u=1/13 (first segment), year should be -250
   const result = sliderToYear(1 / 13, anchors);
   assert.ok(result >= anchors[0] && result <= anchors[1]);
+});
+
+test("sliderToYear: single anchor returns that anchor for any u", () => {
+  const singleAnchor = [1200];
+  const result1 = sliderToYear(0, singleAnchor);
+  const result2 = sliderToYear(0.5, singleAnchor);
+  const result3 = sliderToYear(1, singleAnchor);
+  assert.strictEqual(result1, 1200);
+  assert.strictEqual(result2, 1200);
+  assert.strictEqual(result3, 1200);
+});
+
+test("yearToSlider: single anchor returns 0 for any year", () => {
+  const singleAnchor = [1200];
+  const result1 = yearToSlider(1000, singleAnchor);
+  const result2 = yearToSlider(1200, singleAnchor);
+  const result3 = yearToSlider(1500, singleAnchor);
+  assert.strictEqual(result1, 0);
+  assert.strictEqual(result2, 0);
+  assert.strictEqual(result3, 0);
+});
+
+test("sliderToYear and yearToSlider: single anchor roundtrip", () => {
+  const singleAnchor = [1500];
+  const u = 0.5;
+  const year = sliderToYear(u, singleAnchor);
+  const uBack = yearToSlider(year, singleAnchor);
+  assert.strictEqual(year, 1500);
+  assert.strictEqual(uBack, 0);
 });
