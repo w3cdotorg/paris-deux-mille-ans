@@ -18,15 +18,20 @@ const scene = new THREE.Scene();
 // Fixed 3/4 aerial view (provisional — Task 6 adds orbit controls). Elevated,
 // positioned south-east of the Paris core so the Seine's north-west run
 // toward La Défense (and its attenuated off-map tail) recedes into the
-// distance rather than sitting behind the camera.
+// distance rather than sitting behind the camera. Pitched steeply (and with
+// a narrower lens than a first pass used) so the frustum's topmost ray stays
+// well below horizontal — a shallow top ray needs an enormous run of ground
+// before it would ever reach y=0, and past the (necessarily finite) ground
+// plane that reads as a pale wash where the sky dome's underside shows
+// through instead (review Critical 2).
 const camera = new THREE.PerspectiveCamera(
-  50,
+  45,
   window.innerWidth / window.innerHeight,
   2,
   4000
 );
-camera.position.set(620, 480, 760);
-camera.lookAt(-120, 10, -40);
+camera.position.set(450, 620, 620);
+camera.lookAt(-140, 0, -80);
 
 /** @type {{year:number, weather:string, showLandmarks:boolean, reducedMotion:boolean, time:number}} */
 const state = {
@@ -82,15 +87,39 @@ function updateYearLabel() {
 }
 updateYearLabel();
 
+/**
+ * Canonical year setter: clamps, updates state + the corner label, then
+ * forces an immediate full terrain rescan and render — bypassing the normal
+ * per-frame debounce so the change is visible the instant this returns,
+ * regardless of requestAnimationFrame timing. Used by the keyboard handler
+ * below and exposed on window.__paris for automation/verification, since
+ * driving state.year indirectly (dispatching synthetic key events) has no
+ * reliable way to confirm the render loop actually picked the change up.
+ * @param {number} year
+ */
+function setYear(year) {
+  state.year = Math.max(YEAR_MIN, Math.min(YEAR_MAX, year));
+  updateYearLabel();
+  terrain.forceRescan(state.year);
+  renderer.render(scene, camera);
+}
+
 window.addEventListener("keydown", (event) => {
   if (event.key === "ArrowRight") {
-    state.year = Math.min(YEAR_MAX, state.year + YEAR_STEP);
-    updateYearLabel();
+    setYear(state.year + YEAR_STEP);
   } else if (event.key === "ArrowLeft") {
-    state.year = Math.max(YEAR_MIN, state.year - YEAR_STEP);
-    updateYearLabel();
+    setYear(state.year - YEAR_STEP);
   }
 });
+
+// Debug/verification hook (permanent — load-bearing for automated checks in
+// this task and later ones, e.g. Task 19's full-timeline traversal).
+window.__paris = {
+  get state() {
+    return state;
+  },
+  setYear,
+};
 
 // --- Main loop --------------------------------------------------------------
 const clock = new THREE.Clock();

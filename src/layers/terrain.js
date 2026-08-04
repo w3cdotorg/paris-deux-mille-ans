@@ -28,13 +28,25 @@ import { lifecycle, lerp, smoothstep } from "../timeEngine.js";
 // Extended beyond the brief's minimum (x:[-1100,700] z:[-800,800]) so the
 // finite plane's edge stays well outside the fixed aerial camera's frustum —
 // otherwise the sky dome's underside peeks through past the corner at this
-// oblique angle, reading as a jarring pale gap right at the horizon.
-const GROUND_X_MIN = -1700;
-const GROUND_X_MAX = 1300;
-const GROUND_Z_MIN = -1300;
-const GROUND_Z_MAX = 1300;
+// oblique angle. Kept fairly large even after steepening the camera (fix for
+// review Critical 2) as a safety margin against any residual grazing ray.
+const GROUND_X_MIN = -2200;
+const GROUND_X_MAX = 1800;
+const GROUND_Z_MIN = -2200;
+const GROUND_Z_MAX = 2200;
 const GROUND_SEGMENTS_X = 256;
 const GROUND_SEGMENTS_Z = 256;
+
+// Trees are only generated within this smaller, brief-matching window (not
+// across the padded GROUND_* extent above) — the padding exists purely to
+// keep the horizon seamless from the fixed camera; seeding ~20k tree
+// candidates over 2.7x more area than that would both blow past the
+// brief's target count and waste density on countryside that's barely in
+// frame.
+const FOREST_X_MIN = -1100;
+const FOREST_X_MAX = 700;
+const FOREST_Z_MIN = -800;
+const FOREST_Z_MAX = 800;
 
 // Ground within this distance (world units) of the Seine centerline reads
 // as underwater, fading to dry land by RIVER_WATER_FADE. Deliberately a
@@ -117,6 +129,43 @@ function ellipseFalloff(x, z, cx, cz, rx, rz) {
   const dx = (x - cx) / rx;
   const dz = (z - cz) / rz;
   return Math.exp(-(dx * dx + dz * dz));
+}
+
+// ============================================================================
+// Pure decision functions — no THREE, no scene graph. Exported so they can
+// be unit-tested directly (node --test) without a WebGL context.
+// ============================================================================
+
+/**
+ * Forest<->urban blend factor for a ground cell: 0 = pure forest colour,
+ * 1 = pure urban colour. Smooth over TRANSITION_YEARS on purpose — see the
+ * constant's comment — but still resolves to (numerically) 0 or 1 far from
+ * the frontier, e.g. a cell urbanized many centuries before `year`.
+ * @param {number} urbanYearValue - urbanYear(x, z); may be Infinity.
+ * @param {number} year
+ * @param {number} [transitionYears]
+ * @returns {number} in [0, 1]
+ */
+export function groundUrbanBlend(urbanYearValue, year, transitionYears = TRANSITION_YEARS) {
+  const raw = clamp01((year - urbanYearValue) / transitionYears + 0.5);
+  return smoothstep(raw);
+}
+
+/**
+ * Whether a forest candidate should be a live tree at `year`: excludes
+ * water (river course, incl. the off-map tail, via a spatial margin — not
+ * a height threshold, see RIVER_WATER_CORE's comment for why) and any cell
+ * already urbanized by `year`. Deliberately a hard threshold (unlike the
+ * ground colour blend above) — the retreat itself should read crisply.
+ * @param {number} distSeineValue - distance from the candidate to the Seine centerline.
+ * @param {number} urbanYearValue - urbanYear(x, z); may be Infinity.
+ * @param {number} year
+ * @param {number} [seineMargin]
+ * @returns {boolean}
+ */
+export function isForestCandidate(distSeineValue, urbanYearValue, year, seineMargin = SEINE_TREE_MARGIN) {
+  if (distSeineValue < seineMargin) return false;
+  return urbanYearValue > year;
 }
 
 /** Constant bump for Cité + Saint-Louis: real geographic islands, always raised. */
@@ -305,8 +354,7 @@ function recolorGround(year) {
   const channelZ = louviers.z - (louviers.rz + 3);
 
   for (let i = 0; i < vertexCount; i++) {
-    const raw = clamp01((year - uYear[i]) / TRANSITION_YEARS + 0.5);
-    const urbanT = smoothstep(raw);
+    const urbanT = groundUrbanBlend(uYear[i], year);
     const variationFactor = 1 + variation[i] * 0.08;
 
     let r = (fr + (ur - fr) * urbanT) * variationFactor;
@@ -459,18 +507,19 @@ function buildRiver(ctx) {
 function buildForestCandidates(quality) {
   const density = quality && quality.trees ? quality.trees : 1;
   const cell = FOREST_CELL / Math.sqrt(Math.max(0.1, Math.min(2, density)));
-  const cellsX = Math.round((GROUND_X_MAX - GROUND_X_MIN) / cell);
-  const cellsZ = Math.round((GROUND_Z_MAX - GROUND_Z_MIN) / cell);
+  const cellsX = Math.round((FOREST_X_MAX - FOREST_X_MIN) / cell);
+  const cellsZ = Math.round((FOREST_Z_MAX - FOREST_Z_MIN) / cell);
   const candidates = [];
 
   for (let gz = 0; gz < cellsZ; gz++) {
     for (let gx = 0; gx < cellsX; gx++) {
       const jx = (hash01(gx, gz, 11) - 0.5) * cell * FOREST_JITTER;
       const jz = (hash01(gx, gz, 22) - 0.5) * cell * FOREST_JITTER;
-      const x = GROUND_X_MIN + (gx + 0.5) * cell + jx;
-      const z = GROUND_Z_MIN + (gz + 0.5) * cell + jz;
+      const x = FOREST_X_MIN + (gx + 0.5) * cell + jx;
+      const z = FOREST_Z_MIN + (gz + 0.5) * cell + jz;
 
-      if (distanceToSeine(x, z, SEINE_POINTS) < SEINE_TREE_MARGIN) continue;
+      const distSeine = distanceToSeine(x, z, SEINE_POINTS);
+      if (distSeine < SEINE_TREE_MARGIN) continue;
 
       const uYear = urbanYear(x, z);
       const archetype = Math.floor(hash01(gx, gz, 33) * 3);
@@ -479,7 +528,7 @@ function buildForestCandidates(quality) {
       const hueShift = hash01(gx, gz, 66) * 2 - 1;
       const y = heightAt(x, z);
 
-      candidates.push({ x, z, y, uYear, archetype, rot, scale, hueShift });
+      candidates.push({ x, z, y, uYear, distSeine, archetype, rot, scale, hueShift });
     }
   }
   return candidates;
@@ -533,7 +582,7 @@ function rescanForest(year) {
 
   for (let i = 0; i < candidates.length; i++) {
     const c = candidates[i];
-    if (!(c.uYear > year)) continue;
+    if (!isForestCandidate(c.distSeine, c.uYear, year)) continue;
 
     _reuseQuat.setFromAxisAngle(UP, c.rot);
 
@@ -630,8 +679,13 @@ function buildSky(ctx) {
   const geometry = new THREE.SphereGeometry(3200, 32, 16);
   const material = new THREE.ShaderMaterial({
     uniforms: {
-      uTop: { value: new THREE.Color(0x8fb8d8) },
-      uHorizon: { value: new THREE.Color(0xe7eef2) },
+      uTop: { value: new THREE.Color(0x6fa8d0) },
+      // Warm atmospheric tint, deliberately a different hue from the fog
+      // color below — with the camera steepened (review Critical 2) the
+      // two should barely ever meet, but keeping them distinct means any
+      // residual sliver still reads as a proper (if hazy) horizon line
+      // rather than dome and fog melting into one shapeless pale mass.
+      uHorizon: { value: new THREE.Color(0xf3e6cf) },
     },
     vertexShader: SKY_VERTEX_SHADER,
     fragmentShader: SKY_FRAGMENT_SHADER,
@@ -643,15 +697,11 @@ function buildSky(ctx) {
   mesh.frustumCulled = false;
   ctx.scene.add(mesh);
 
-  // Same tone as the dome's uHorizon on purpose: any residual sliver where a
-  // shallow-grazing frustum ray clears the finite ground before reaching the
-  // dome (an inherent artifact of any finite plane at a wide FOV) fades to
-  // an identical color on both sides of that seam, so it reads as haze
-  // rather than a hole. Fairly dense so real distant ground is already
-  // fully blended before its edge could ever show.
-  const HORIZON_HAZE = 0xe7eef2;
-  ctx.scene.background = new THREE.Color(HORIZON_HAZE);
-  ctx.scene.fog = new THREE.Fog(HORIZON_HAZE, 900, 2400);
+  // Distinct from the dome's uHorizon (see above) and much tighter than a
+  // first pass — dense enough to soften the far countryside, starting well
+  // past the framed Paris core so the urban carpet/forest read crisply.
+  ctx.scene.background = new THREE.Color(0x9fb8c4);
+  ctx.scene.fog = new THREE.Fog(0x9fb8c4, 1800, 3200);
 }
 
 function addLights(ctx) {
@@ -682,6 +732,20 @@ function maybeRescan(state) {
   lastScanYear = year;
   lastScanTime = state.time;
   rescanAll(year);
+}
+
+/**
+ * Forces an immediate full rescan for `year`, bypassing the normal
+ * once-per-changed-year debounce. Used by main.js's window.__paris debug
+ * hook so automation/verification can set a year and see the result on the
+ * very next render, without depending on requestAnimationFrame timing.
+ * @param {number} year
+ */
+export function forceRescan(year) {
+  const rounded = Math.round(year);
+  lastScanYear = rounded;
+  lastScanTime = performance.now() / 1000;
+  rescanAll(rounded);
 }
 
 // ============================================================================
