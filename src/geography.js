@@ -121,6 +121,15 @@ export const RINGS = {
 // SEINE_POINTS — river meander control points
 // ============================================================================
 
+// Number of leading points in SEINE_POINTS that trace the river across the
+// playable map (the brief's 12 verbatim tuples). Everything after this index
+// is the off-map return loop described in the brief ("+ boucle hors carte
+// vers le NO ... atténué") — a stylized bend around Boulogne, north past
+// Neuilly, just west of La Défense, exiting the map to the north-west.
+// Renderers that need to fade this tail out (and heightAt's Seine valley,
+// which only carves the on-map course) can slice on this constant.
+export const SEINE_ONMAP_COUNT = 12;
+
 export const SEINE_POINTS = [
   { x: 300, z: 315 },
   { x: 215, z: 170 },
@@ -134,6 +143,13 @@ export const SEINE_POINTS = [
   { x: -456, z: -31 },
   { x: -520, z: 33 },
   { x: -586, z: 292 },
+  // --- off-map return loop (hors carte, atténué) ---
+  { x: -660, z: 345 }, // Boulogne-like bend, continuing south-west
+  { x: -742, z: 300 }, // westernmost bulge of the loop
+  { x: -788, z: 110 }, // turning north
+  { x: -812, z: -160 }, // flowing north past Neuilly
+  { x: -855, z: -395 }, // just west of La Défense (-834, -433)
+  { x: -905, z: -560 }, // exiting the map to the north-west
 ];
 
 // ============================================================================
@@ -189,7 +205,10 @@ function distanceToPolyline(x, z, points) {
 
 /** Riverbed slightly below 0, banks slightly above, fading out with distance. */
 function seineRelief(x, z) {
-  const d = distanceToPolyline(x, z, SEINE_POINTS);
+  // Only the on-map course carves the terrain — the off-map return loop is
+  // a stylized, attenuated flourish for renderers, not a real valley.
+  const onMapPoints = SEINE_POINTS.slice(0, SEINE_ONMAP_COUNT);
+  const d = distanceToPolyline(x, z, onMapPoints);
   const trough =
     -SEINE_TROUGH_DEPTH *
     Math.exp(-(d * d) / (2 * SEINE_TROUGH_SIGMA * SEINE_TROUGH_SIGMA));

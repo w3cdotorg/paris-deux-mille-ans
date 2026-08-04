@@ -4,6 +4,7 @@ import {
   LANDMARKS,
   RINGS,
   SEINE_POINTS,
+  SEINE_ONMAP_COUNT,
   ISLANDS,
   heightAt,
   urbanYear,
@@ -69,8 +70,9 @@ test("geography: chez nous is framed by the two rings (petite ceinture south, p�
 // SEINE_POINTS — river polyline control points
 // ============================================================================
 
-test("geography: SEINE_POINTS exposes the meander control points verbatim", () => {
-  assert.deepEqual(SEINE_POINTS, [
+test("geography: SEINE_POINTS exposes the on-map meander control points verbatim", () => {
+  assert.equal(SEINE_ONMAP_COUNT, 12);
+  assert.deepEqual(SEINE_POINTS.slice(0, SEINE_ONMAP_COUNT), [
     { x: 300, z: 315 },
     { x: 215, z: 170 },
     { x: 95, z: 60 },
@@ -84,6 +86,19 @@ test("geography: SEINE_POINTS exposes the meander control points verbatim", () =
     { x: -520, z: 33 },
     { x: -586, z: 292 },
   ]);
+});
+
+test("geography: SEINE_POINTS extends past the map with the off-map return loop toward La Défense", () => {
+  // The brief calls for a loop hors carte vers le NO, back toward La Défense
+  // (-834,-433), exiting the map. The tail must keep going past the last
+  // on-map point, not stop at (-586,292).
+  assert.ok(
+    SEINE_POINTS.length > SEINE_ONMAP_COUNT,
+    "SEINE_POINTS should have additional off-map points after the on-map course"
+  );
+  const last = SEINE_POINTS[SEINE_POINTS.length - 1];
+  assert.ok(last.x < -700, `last Seine point should exit west (x=${last.x})`);
+  assert.ok(last.z < -350, `last Seine point should exit north (z=${last.z})`);
 });
 
 // ============================================================================
