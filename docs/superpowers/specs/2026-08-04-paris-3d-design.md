@@ -135,9 +135,10 @@ fondu-enchaîné avec le slider. **Coupés par défaut**, gros bouton 🔈.
 
 ## Technique
 
-- Dossier `raphael_paris/` : `index.html` (app entière) + `vendor/three.module.js`
-  et addons nécessaires, **version épinglée, embarquée localement** via import map —
-  hors ligne pour toujours.
+- Dossier `raphael_paris/` : `index.html` + modules ES séparés dans `src/` +
+  `vendor/three.module.js`, **version épinglée, embarquée localement** via import map.
+  Servi par un petit serveur local (`./serve.sh`) ou GitHub Pages — pas de bundling,
+  le JS reste lisible et séparé (décision utilisateur du 2026-08-04).
 - Tout procédural : aucune image, aucun modèle externe, aucune donnée téléchargée.
 - Google Fonts (Fredoka / Baloo 2) avec repli système, comme le volcan.
 
@@ -165,7 +166,8 @@ Cible principale : **ordinateur portable, 60 fps**. Second appareil de référen
 
 ## Critères de réussite
 
-- S'ouvre en local (`open index.html`), fonctionne hors ligne, sur laptop et iPad M1.
+- Se lance via `./serve.sh` (ou GitHub Pages), fonctionne sans réseau autre que le
+  serveur local, sur laptop et iPad M1.
 - Le slider scrubbe sans à-coups ; aucune incohérence temporelle (bâtiment orphelin,
   muraille à moitié née) quelle que soit la position.
 - Les 14 moments sont chacun un monde vivant et *distinct* (lumière, sons, foules,
