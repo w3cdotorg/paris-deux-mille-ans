@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { YEAR_MIN, YEAR_MAX } from "./timeline.js";
 import * as terrain from "./layers/terrain.js";
+import { createControls } from "./controls.js";
+import * as ui from "./ui.js";
 
 const canvas = document.querySelector("#scene");
 
@@ -15,29 +17,21 @@ renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
 
-// Fixed 3/4 aerial view (provisional — Task 6 adds orbit controls). Elevated,
-// positioned south-east of the Paris core so the Seine's north-west run
-// toward La Défense (and its attenuated off-map tail) recedes into the
-// distance rather than sitting behind the camera. Pitched steeply (and with
-// a narrower lens than a first pass used) so the frustum's topmost ray stays
-// well below horizontal — a shallow top ray needs an enormous run of ground
-// before it would ever reach y=0, and past the (necessarily finite) ground
-// plane that reads as a pale wash where the sky dome's underside shows
-// through instead (review Critical 2).
 const camera = new THREE.PerspectiveCamera(
   45,
   window.innerWidth / window.innerHeight,
   2,
   4000
 );
-camera.position.set(450, 620, 620);
-camera.lookAt(-140, 0, -80);
 
-/** @type {{year:number, weather:string, showLandmarks:boolean, reducedMotion:boolean, time:number}} */
+/** @type {{year:number, weather:string, showLandmarks:boolean, voice:boolean, sound:boolean, qualityTier:string, reducedMotion:boolean, time:number}} */
 const state = {
   year: 2026,
   weather: "sun",
   showLandmarks: true,
+  voice: false,
+  sound: false,
+  qualityTier: "haut",
   reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   time: 0,
 };
@@ -51,6 +45,47 @@ for (const layer of layers) {
   layer.init(ctx);
 }
 
+// Custom orbit/pan/zoom controls (see controls.js) — sets the camera's
+// initial position to the `ensemble` preset, which exactly reproduces the
+// project's original fixed establishing shot.
+const controls = createControls(camera, canvas, () => state);
+
+// UI shell (frise, boutons ronds, story-card slot) — follows the same
+// init/update contract as the scene layers above, but drives the DOM.
+ui.init(state);
+
+// ui.js never mutates `state` directly; it only emits bus events. This is
+// the one place that translates them into state mutations (or, for
+// 'preset', a camera flight).
+ui.bus.addEventListener("yearchange", (event) => {
+  // Deliberately just an assignment — no forced rescan here. Both a
+  // handle-drag and an icon's flyToYear tween call this many times per
+  // second; terrain.js's own maybeRescan() (called every frame from the
+  // layer update loop below) already debounces to at most one rescan per
+  // ~60ms, so this path can never trigger an unthrottled full rescan per
+  // pointermove. window.__paris.setYear (below) is the separate, deliberately
+  // un-throttled path for single automated calls.
+  state.year = Math.max(YEAR_MIN, Math.min(YEAR_MAX, event.detail.year));
+});
+ui.bus.addEventListener("weatherchange", (event) => {
+  state.weather = event.detail.weather;
+});
+ui.bus.addEventListener("preset", (event) => {
+  controls.flyTo(event.detail.name);
+});
+ui.bus.addEventListener("voicechange", (event) => {
+  state.voice = event.detail.enabled;
+});
+ui.bus.addEventListener("soundchange", (event) => {
+  state.sound = event.detail.enabled;
+});
+ui.bus.addEventListener("landmarkschange", (event) => {
+  state.showLandmarks = event.detail.show;
+});
+ui.bus.addEventListener("qualitychange", (event) => {
+  state.qualityTier = event.detail.tier;
+});
+
 function onResize() {
   const width = window.innerWidth;
   const height = window.innerHeight;
@@ -61,56 +96,39 @@ function onResize() {
 }
 window.addEventListener("resize", onResize);
 
-// --- Provisional keyboard year control (Task 6 replaces with real UI) -----
+// --- Keyboard: accessibility fallback for orbit/timeline/presets ----------
 const YEAR_STEP = 20;
+const PRESET_KEYS = { 1: "ensemble", 2: "cite", 3: "chezNous", 4: "eiffel" };
 
-const yearLabel = document.createElement("div");
-yearLabel.id = "year-label";
-Object.assign(yearLabel.style, {
-  position: "fixed",
-  top: "12px",
-  left: "12px",
-  padding: "6px 14px",
-  background: "rgba(10, 14, 24, 0.55)",
-  color: "#fdf6e3",
-  font: "600 15px 'Fredoka', system-ui, sans-serif",
-  borderRadius: "8px",
-  zIndex: "10",
-  pointerEvents: "none",
+window.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowRight") {
+    // Same throttled path as a handle drag: a plain assignment, picked up
+    // by terrain's per-frame debounced rescan — never an immediate forced
+    // rescan on every keypress.
+    state.year = Math.max(YEAR_MIN, Math.min(YEAR_MAX, state.year + YEAR_STEP));
+  } else if (event.key === "ArrowLeft") {
+    state.year = Math.max(YEAR_MIN, Math.min(YEAR_MAX, state.year - YEAR_STEP));
+  } else if (PRESET_KEYS[event.key]) {
+    controls.flyTo(PRESET_KEYS[event.key]);
+  }
 });
-document.body.appendChild(yearLabel);
-
-function updateYearLabel() {
-  const y = Math.round(state.year);
-  const label = y < 0 ? `${Math.abs(y)} av. J.-C.` : `${y}`;
-  yearLabel.textContent = `Année : ${label}`;
-}
-updateYearLabel();
 
 /**
- * Canonical year setter: clamps, updates state + the corner label, then
- * forces an immediate full terrain rescan and render — bypassing the normal
- * per-frame debounce so the change is visible the instant this returns,
- * regardless of requestAnimationFrame timing. Used by the keyboard handler
- * below and exposed on window.__paris for automation/verification, since
- * driving state.year indirectly (dispatching synthetic key events) has no
- * reliable way to confirm the render loop actually picked the change up.
+ * Canonical year setter: clamps, updates state, then forces an immediate
+ * full terrain rescan and render — bypassing the normal per-frame debounce
+ * so the change is visible the instant this returns, regardless of
+ * requestAnimationFrame timing. Exposed on window.__paris for
+ * automation/verification (single calls only — driving this rapidly would
+ * defeat the point of the throttled path above, which is what real drag/
+ * keyboard/flight input goes through instead).
  * @param {number} year
  */
 function setYear(year) {
   state.year = Math.max(YEAR_MIN, Math.min(YEAR_MAX, year));
-  updateYearLabel();
   terrain.forceRescan(state.year);
+  ui.update(0, state);
   renderer.render(scene, camera);
 }
-
-window.addEventListener("keydown", (event) => {
-  if (event.key === "ArrowRight") {
-    setYear(state.year + YEAR_STEP);
-  } else if (event.key === "ArrowLeft") {
-    setYear(state.year - YEAR_STEP);
-  }
-});
 
 // Debug/verification hook (permanent — load-bearing for automated checks in
 // this task and later ones, e.g. Task 19's full-timeline traversal).
@@ -119,6 +137,8 @@ window.__paris = {
     return state;
   },
   setYear,
+  flyTo: (name, duration) => controls.flyTo(name, duration),
+  camera,
 };
 
 // --- Main loop --------------------------------------------------------------
@@ -133,6 +153,8 @@ function animate() {
   for (const layer of layers) {
     layer.update(dt, state);
   }
+  controls.update(dt);
+  ui.update(dt, state);
 
   renderer.render(scene, camera);
 

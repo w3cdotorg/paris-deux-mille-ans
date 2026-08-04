@@ -1,0 +1,320 @@
+/*
+ * Paris, deux mille ans — UI shell (frise, boutons ronds, popovers).
+ * Same family as "Dans mon volcan": verre dépoli, gros touch targets,
+ * palette chaude sur fond nuit, Fredoka pour l'affiche / Baloo 2 pour l'UI.
+ */
+
+:root {
+  --pdma-glass-bg: rgba(20, 20, 38, 0.55);
+  --pdma-glass-border: rgba(255, 255, 255, 0.14);
+  --pdma-glass-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --pdma-warm-1: #ffb454;
+  --pdma-warm-2: #ff7b54;
+  --pdma-warm-3: #ffe0b0;
+  --pdma-cream: #fdf3e4;
+  --pdma-ink: #2a1d12;
+}
+
+.pdma-icon-btn,
+.pdma-moment-btn,
+.pdma-popover-btn,
+.pdma-year-display,
+.pdma-story-card {
+  font-family: "Baloo 2", "Fredoka", system-ui, sans-serif;
+}
+
+/* ============================== Story card slot (Task 15) ============== */
+
+.pdma-story-card {
+  display: none; /* Task 15 toggles this on when it has content */
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  max-width: 360px;
+  z-index: 20;
+  background: var(--pdma-glass-bg);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid var(--pdma-glass-border);
+  border-radius: 24px;
+  box-shadow: var(--pdma-glass-shadow);
+  color: var(--pdma-cream);
+  padding: 18px 20px;
+  pointer-events: auto;
+}
+
+/* ============================== Round action buttons =================== */
+
+.pdma-buttons-row {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 30;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  max-width: min(340px, calc(100vw - 36px));
+  pointer-events: auto;
+}
+
+.pdma-btn-wrap {
+  position: relative;
+}
+
+.pdma-icon-btn {
+  width: 52px;
+  height: 52px;
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 50%;
+  border: 1px solid var(--pdma-glass-border);
+  background: var(--pdma-glass-bg);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  box-shadow: var(--pdma-glass-shadow);
+  font-size: 24px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--pdma-cream);
+  transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+.pdma-icon-btn:hover {
+  transform: translateY(-2px) scale(1.05);
+}
+
+.pdma-icon-btn:active {
+  transform: scale(0.94);
+}
+
+.pdma-icon-btn.pdma-pressed {
+  background: linear-gradient(160deg, rgba(255, 180, 84, 0.4), rgba(255, 123, 84, 0.28));
+  border-color: rgba(255, 200, 130, 0.85);
+  box-shadow: 0 0 0 3px rgba(255, 180, 84, 0.25), var(--pdma-glass-shadow);
+}
+
+/* Popovers (views menu, quality menu) */
+
+.pdma-popover {
+  display: none;
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 200px;
+  padding: 10px;
+  border-radius: 20px;
+  background: var(--pdma-glass-bg);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid var(--pdma-glass-border);
+  box-shadow: var(--pdma-glass-shadow);
+  z-index: 31;
+}
+
+.pdma-popover.pdma-open {
+  display: flex;
+}
+
+.pdma-popover-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--pdma-cream);
+  font-size: 16px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.pdma-popover-btn:hover {
+  background: rgba(255, 180, 84, 0.22);
+}
+
+.pdma-popover-btn:active {
+  transform: scale(0.97);
+}
+
+.pdma-popover-btn.pdma-pressed {
+  background: linear-gradient(160deg, rgba(255, 180, 84, 0.4), rgba(255, 123, 84, 0.28));
+}
+
+.pdma-popover-emoji {
+  font-size: 20px;
+}
+
+/* ============================== Bottom timeline (frise) ================= */
+
+.pdma-timeline {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  padding: 10px 20px calc(16px + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(
+    to top,
+    rgba(10, 12, 24, 0.72) 0%,
+    rgba(10, 12, 24, 0.55) 60%,
+    rgba(10, 12, 24, 0) 100%
+  );
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  pointer-events: auto;
+}
+
+.pdma-year-display {
+  text-align: center;
+  font-family: "Fredoka", sans-serif;
+  font-weight: 600;
+  font-size: clamp(28px, 6vw, 44px);
+  color: var(--pdma-warm-3);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+
+.pdma-track {
+  position: relative;
+  height: 64px;
+  margin: 4px 6px 0;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.pdma-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 10px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    #2f3b57 0%,
+    #4a4f6b 20%,
+    #7a5a63 45%,
+    #c98a54 65%,
+    #ffb454 85%,
+    #ffe0b0 100%
+  );
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.pdma-track-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 10px;
+  width: 0%;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 180, 84, 0.15), rgba(255, 224, 176, 0.9));
+  box-shadow: 0 0 12px rgba(255, 180, 84, 0.55);
+  pointer-events: none;
+}
+
+.pdma-moment-btn {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 50%;
+  border: 1px solid var(--pdma-glass-border);
+  background: rgba(20, 20, 38, 0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease;
+  z-index: 2;
+}
+
+.pdma-moment-btn:hover {
+  transform: translate(-50%, -50%) scale(1.12);
+}
+
+.pdma-moment-btn.pdma-active {
+  background: linear-gradient(160deg, rgba(255, 180, 84, 0.45), rgba(255, 123, 84, 0.3));
+  border-color: rgba(255, 210, 140, 0.95);
+  animation: pdma-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes pdma-pulse {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 180, 84, 0.55);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.16);
+    box-shadow: 0 0 0 10px rgba(255, 180, 84, 0);
+  }
+}
+
+.pdma-handle {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 54px;
+  height: 54px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: transparent;
+  border: 3px solid var(--pdma-cream);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35), 0 0 16px rgba(255, 180, 84, 0.75);
+  pointer-events: none;
+  z-index: 1; /* sits behind the moment icons so it rings, not hides, one */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdma-moment-btn.pdma-active {
+    animation: none;
+  }
+  .pdma-icon-btn,
+  .pdma-moment-btn,
+  .pdma-popover-btn {
+    transition: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .pdma-icon-btn {
+    width: 48px;
+    height: 48px;
+    font-size: 21px;
+  }
+  .pdma-buttons-row {
+    top: 12px;
+    right: 12px;
+    gap: 8px;
+  }
+  .pdma-moment-btn {
+    /* 14 stops can't each reach 48px on a narrow phone without overlapping
+       badly — the track itself (64px tall, full width, grab-anywhere-to-
+       scrub) is the real big touch target here; these are wayfinding dots
+       plus a precise-jump bonus for bigger screens / a parent's finger. */
+    width: 38px;
+    height: 38px;
+    font-size: 18px;
+  }
+}
