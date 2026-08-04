@@ -1,0 +1,10 @@
+{
+  "name": "raphael-paris",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "vendor": "cp node_modules/three/build/three.module.js node_modules/three/build/three.core.js vendor/"
+  },
+  "dependencies": { "three": "0.180.0" }
+}
