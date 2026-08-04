@@ -63,10 +63,12 @@ glisser librement = interpolation continue entre les états.
 6. **~1670** — Louis XIV abat les remparts : ville ouverte, Grands Boulevards.
 7. **1789** — Révolution : prise puis démolition de la Bastille.
 8. **1860** — Annexion des communes : **le quartier de Raphaël devient Paris** 🏠,
-   enceinte de Thiers, **la petite ceinture arrive** 🚂 (construite 1852-1869).
+   enceinte de Thiers (achevée en 1844, elle dessine le nouveau périmètre),
+   **la petite ceinture arrive** 🚂 (construite 1852-1869).
 9. **~1865** — Haussmann : grandes percées, immeubles de pierre à toits de zinc.
 10. **1889** — La Tour Eiffel : le fantôme devient réel, construction étage par étage.
-11. **1900** — Le métro 🚇 + Exposition universelle (viaduc aérien à Barbès).
+11. **1900** — Le métro 🚇 (ligne 1) + Exposition universelle ; le viaduc aérien
+    de Barbès suit en 1903.
 12. **1934** — La petite ceinture ferme : les trains disparaissent, la nature commence
     à reprendre les rails.
 13. **1973** — Le périphérique, coulé comme un ruban sur l'ancienne enceinte de Thiers.
