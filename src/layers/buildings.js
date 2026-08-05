@@ -5,12 +5,16 @@
  *
  *  1. **Grille de cellules 8x8 unités (80 m)** couvrant la zone urbanisable
  *     (ellipse du périphérique + grappe de La Défense). Chaque cellule
- *     urbanisée reçoit 4 à 9 bâtiments posés *en îlot périmétrique* : les
- *     façades s'alignent sur une ligne de rue à 3,25 unités du centre de
+ *     urbanisée reçoit 2 à 13 bâtiments posés *en îlot périmétrique* : les
+ *     façades s'alignent sur une ligne de rue à 3,55 unités du centre de
  *     cellule et la profondeur du bâtiment part vers l'intérieur, ce qui
- *     laisse une cour au milieu et une rue de ~15 m entre deux îlots. C'est
- *     la morphologie parisienne, et c'est ce qui fait « lire » la ville d'en
- *     haut, bien plus qu'un semis de boîtes.
+ *     laisse une cour au milieu et une rue de ~9 m entre deux îlots. Les
+ *     bâtiments d'une même arête sont posés *contigus* (un curseur par arête,
+ *     largeur réelle + mur mitoyen) plutôt qu'espacés uniformément, avec un
+ *     repli borné (rétrécissement jusqu'à ~0,75× puis abandon de l'instance)
+ *     si une arête est déjà pleine — voir `placeCell`/`fitOnEdge` pour le
+ *     détail. C'est la morphologie parisienne, et c'est ce qui fait « lire »
+ *     la ville d'en haut, bien plus qu'un semis de boîtes.
  *
  *  2. **Modèle d'époques de (re)construction** (voir EPOCHS). Une cellule
  *     naît à `urbanYear`, mais son bâti est refait à chaque grande époque
@@ -71,7 +75,15 @@ const GRID_Z_MAX = 356;
 // couverture. Deux îlots voisins se font donc face à 4,9 unités, soit une
 // rue de 0,9 unité (9 m, une rue étroite mais plausible dans le tissu ancien).
 const FACADE_LINE = 3.55;
-const EDGE_SPAN = 0.78; // fraction de l'arête utilisable (évite les angles pile)
+// Relevé de 0,78 à 0,92 (fix-of-fix du débordement de curseur, voir
+// `fitOnEdge` plus bas) : borner chaque pose à l'espace réellement
+// disponible de son arête (au lieu de laisser le curseur déborder dans la
+// cellule voisine) fait aussi baisser la couverture du coeur sous la cible
+// de 60% (50,4% mesuré juste après le plafonnement) — une arête plus longue
+// laisse plus de bâtiments s'y poser à taille nominale avant d'avoir besoin
+// de rétrécir ou d'abandonner une instance, ce qui restaure la couverture
+// sans jamais dépasser la moitié physique de la cellule (4 unités).
+const EDGE_SPAN = 0.92; // fraction de l'arête utilisable (évite les angles pile)
 const PARTY_WALL_SEAM = 0.04; // interstice entre deux bâtiments contigus (mur mitoyen)
 
 const WATER_MARGIN = 9; // pas de bâti à moins de 9 unités de l'axe de la Seine
@@ -86,10 +98,15 @@ const DENSITY_ZERO_R = 640;
 // COUNT_EDGE/VOID_EDGE resserrés pour que le budget total d'instances
 // (≤40 000, voir detailCapacities) finance surtout le tissu haussmannien
 // dense du centre plutôt que d'être dilué uniformément jusqu'aux faubourgs.
+// Retunés une seconde fois après le plafonnement du curseur d'arête
+// (`fitOnEdge`) : borner/rétrécir/abandonner les poses qui ne rentraient pas
+// a coûté de la couverture (61,7% → un COUNT_CORE plus haut la restaure) ;
+// VOID_EDGE/COUNT_EDGE resserrés en retour pour rester sous le budget malgré
+// un COUNT_CORE plus généreux.
 const VOID_CORE = 0.18; // part de cellules non bâties (rues larges, cours, places)
-const VOID_EDGE = 0.78;
-const COUNT_CORE = [9, 12]; // min/max de bâtiments par cellule bâtie, au coeur
-const COUNT_EDGE = [2, 3]; // ... et en périphérie
+const VOID_EDGE = 0.84;
+const COUNT_CORE = [10, 13]; // min/max de bâtiments par cellule bâtie, au coeur
+const COUNT_EDGE = [2, 2]; // ... et en périphérie
 
 // LOD. Le brief demande la bascule « au-delà de ~350 unités de caméra ».
 // Resserré de 320 à 240 (review Critical 1) : le rééquilibrage du budget vers
@@ -417,13 +434,47 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
   // bâtiments, ce qui laissait ~46% de la façade vide entre des bâtiments
   // étroits. Les bâtiments sont distribués aux 4 arêtes en tournant (round
   // robin) selon leur rang de pose.
+  //
+  // Correctif de revue (nouvelle casse « Important ») : ce curseur n'était
+  // borné par rien — avec COUNT_CORE relevé jusqu'à 12, jusqu'à 3 bâtiments
+  // peuvent tomber sur la même arête par le round-robin, et 3 haussmanniens
+  // (2,0-2,5 u × échelle ≤1,2) totalisent 7,5-8,7 u sur une arête utile de
+  // ~5,54 u (2×edgeHalf) — un débordement mesuré jusqu'à +2,35 u, soit ~30 %
+  // d'une cellule, dans la cellule voisine. `fitOnEdge` borne chaque pose :
+  // plein gabarit sur l'arête visée, puis plein gabarit sur les 3 autres
+  // arêtes (« essayer l'arête suivante »), puis, seulement si aucune arête
+  // n'a de place à taille nominale, un gabarit réduit jusqu'au plancher
+  // SCALE_FLOOR sur l'arête visée puis les autres — et seulement si même le
+  // plancher ne rentre nulle part, le bâtiment est abandonné (rare,
+  // déterministe, borné). Diagnostic ci-dessus daté de la casse trouvée par
+  // la revue (COUNT_CORE=[9,12], EDGE_SPAN=0,78) ; EDGE_SPAN et COUNT_CORE
+  // ont depuis été retunés une seconde fois (voir leurs commentaires plus
+  // haut) pour retrouver ≥60% de couverture coeur une fois le plafonnement
+  // en place — le principe et le mécanisme de `fitOnEdge` restent les mêmes.
   const edgeHalf = FACADE_LINE * EDGE_SPAN;
   const cursor = [-edgeHalf, -edgeHalf, -edgeHalf, -edgeHalf];
+  const SCALE_FLOOR = 0.75;
+
+  /**
+   * Facteur de réduction (dans [SCALE_FLOOR, 1]) permettant de faire entrer
+   * un bâtiment de largeur nominale `alongNominal` dans l'espace restant de
+   * cette arête, mur mitoyen inclus ; `null` si même le plancher ne rentre
+   * pas (ou si l'arête est déjà pleine).
+   */
+  function fitOnEdge(remaining, alongNominal) {
+    if (remaining <= 0) return null;
+    const required = alongNominal + PARTY_WALL_SEAM;
+    if (required <= remaining) return 1;
+    const availableAlong = remaining - PARTY_WALL_SEAM;
+    if (availableAlong <= 0) return null;
+    const shrink = availableAlong / alongNominal;
+    return shrink >= SCALE_FLOOR ? shrink : null;
+  }
 
   for (let slot = 0; slot < count; slot++) {
     const seed = seedOf(ix, iz, slot);
     const { family, born } = fabricAt(uYear, year, density, insideRing, seed);
-    const edge = slot & 3;
+    const primaryEdge = slot & 3;
 
     const options = ARCHETYPES_BY_FAMILY[family];
     let archetype = pickArchetype(options, seed);
@@ -435,15 +486,40 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
     // ville se lit comme un bruit de speckle plutôt qu'un tissu dense. Ce
     // socle plus généreux (+~28% de surface au sol en moyenne) referme les
     // interstices sans toucher le nombre d'instances (donc sans coût de perf).
-    const scale = 1.0 + roll(seed, 31) * (family === "haussmann" ? 0.2 : 0.32);
+    const nominalScale = 1.0 + roll(seed, 31) * (family === "haussmann" ? 0.2 : 0.32);
+    const alongNominal = pickedSpec.w * nominalScale;
+
+    // Cherche une arête où ce bâtiment rentre : l'arête visée par le
+    // round-robin d'abord, puis les 3 autres dans l'ordre — à taille
+    // nominale (pass 1), puis, seulement si aucune arête n'a assez de place
+    // à taille nominale, en acceptant un rétrécissement jusqu'à SCALE_FLOOR
+    // (pass 2).
+    let edge = -1;
+    let shrink = null;
+    for (let pass = 0; pass < 2 && shrink === null; pass++) {
+      for (let k = 0; k < 4 && shrink === null; k++) {
+        const e = (primaryEdge + k) & 3;
+        const fit = fitOnEdge(edgeHalf - cursor[e], alongNominal);
+        if (fit === null) continue;
+        if (pass === 0 && fit < 1) continue; // pass 1 : plein gabarit seulement
+        edge = e;
+        shrink = fit;
+      }
+    }
+    if (shrink === null) continue; // aucune arête, même au plancher : abandonné
+
+    const scale = nominalScale * shrink;
     // Hauteur : jitter serré pour l'haussmannien (la ligne de corniche
     // uniforme EST la signature du centre de Paris), large pour le médiéval.
+    // Appliqué à l'échelle *finale* (post-rétrécissement) pour que la hauteur
+    // reste proportionnée à un bâtiment qu'on a dû faire rentrer plus petit.
     const jitterY = family === "medieval" ? 0.3 : family === "haussmann" ? 0.09 : 0.18;
     const scaleY = scale * (1 - jitterY / 2 + roll(seed, 37) * jitterY);
 
-    // Avance le curseur de cette arête de la largeur réelle du bâtiment
+    // Avance le curseur de l'arête retenue de la largeur réelle du bâtiment
     // (avant tout remplacement d'archétype d'angle ci-dessous) + le mur
-    // mitoyen : c'est ce qui rend le mur de rue contigu.
+    // mitoyen : c'est ce qui rend le mur de rue contigu, désormais sans
+    // jamais dépasser l'espace disponible de cette arête.
     const along = pickedSpec.w * scale;
     const s = cursor[edge] + along / 2;
     cursor[edge] += along + PARTY_WALL_SEAM;
