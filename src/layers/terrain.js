@@ -15,6 +15,7 @@ import * as THREE from "three";
 import {
   heightAt,
   urbanYear,
+  distanceToSeine,
   SEINE_POINTS,
   SEINE_ONMAP_COUNT,
   ISLANDS,
@@ -101,28 +102,6 @@ function hash01(a, b, seed) {
 
 function clamp01(v) {
   return v < 0 ? 0 : v > 1 ? 1 : v;
-}
-
-function distanceToSegment(x, z, ax, az, bx, bz) {
-  const abx = bx - ax;
-  const abz = bz - az;
-  const abLen2 = abx * abx + abz * abz;
-  let t = abLen2 === 0 ? 0 : ((x - ax) * abx + (z - az) * abz) / abLen2;
-  t = t < 0 ? 0 : t > 1 ? 1 : t;
-  const cx = ax + abx * t;
-  const cz = az + abz * t;
-  const dx = x - cx;
-  const dz = z - cz;
-  return Math.sqrt(dx * dx + dz * dz);
-}
-
-function distanceToSeine(x, z, points) {
-  let min = Infinity;
-  for (let i = 0; i < points.length - 1; i++) {
-    const d = distanceToSegment(x, z, points[i].x, points[i].z, points[i + 1].x, points[i + 1].z);
-    if (d < min) min = d;
-  }
-  return min;
 }
 
 function ellipseFalloff(x, z, cx, cz, rx, rz) {
@@ -265,7 +244,7 @@ function buildGround(ctx) {
       z[idx] = vz;
       uYear[idx] = urbanYear(vx, vz);
       variation[idx] = hash01(ix, iz, 777) * 2 - 1;
-      distSeine[idx] = distanceToSeine(vx, vz, SEINE_POINTS);
+      distSeine[idx] = distanceToSeine(vx, vz);
 
       const base = heightAt(vx, vz) + constantIslandDelta(vx, vz);
       positions[idx * 3 + 0] = vx;
@@ -321,6 +300,40 @@ function buildGround(ctx) {
   ground.variation = variation;
   ground.distSeine = distSeine;
   ground.louviersIndices = Int32Array.from(louviersIdx);
+}
+
+/**
+ * Altitude of the *rendered* ground surface at (x, z) — i.e. a bilinear
+ * sample of the ground mesh's own vertices, not a fresh `heightAt()` call.
+ *
+ * The two differ: the mesh is a 256x256 grid over a 4000x4400 unit extent
+ * (~15.6 units per quad), so features narrower than a quad — chiefly the
+ * île de la Cité / Saint-Louis bumps, whose falloff spans ~16 units — are
+ * rendered as a coarse tent well below their analytic height. Anything that
+ * must *sit* on the ground (buildings, later monuments and crowds) has to
+ * agree with what the eye sees, otherwise the Cité's buildings float a
+ * metre above their own island. Callers must run after `init()`; before
+ * that it degrades gracefully to the analytic height.
+ * @param {number} x
+ * @param {number} z
+ * @returns {number}
+ */
+export function groundHeightAt(x, z) {
+  if (!ground.geometry) return heightAt(x, z) + constantIslandDelta(x, z);
+  const positions = ground.geometry.attributes.position.array;
+  const fx = clamp01((x - GROUND_X_MIN) / (GROUND_X_MAX - GROUND_X_MIN)) * GROUND_SEGMENTS_X;
+  const fz = clamp01((z - GROUND_Z_MIN) / (GROUND_Z_MAX - GROUND_Z_MIN)) * GROUND_SEGMENTS_Z;
+  const ix0 = Math.min(Math.floor(fx), GROUND_SEGMENTS_X - 1);
+  const iz0 = Math.min(Math.floor(fz), GROUND_SEGMENTS_Z - 1);
+  const tx = fx - ix0;
+  const tz = fz - iz0;
+  const row0 = iz0 * ground.vertsX;
+  const row1 = row0 + ground.vertsX;
+  const h00 = positions[(row0 + ix0) * 3 + 1];
+  const h10 = positions[(row0 + ix0 + 1) * 3 + 1];
+  const h01 = positions[(row1 + ix0) * 3 + 1];
+  const h11 = positions[(row1 + ix0 + 1) * 3 + 1];
+  return lerp(lerp(h00, h10, tx), lerp(h01, h11, tx), tz);
 }
 
 /** Patches just the Louviers/channel neighborhood's height for the given year. */
@@ -518,7 +531,7 @@ function buildForestCandidates(quality) {
       const x = FOREST_X_MIN + (gx + 0.5) * cell + jx;
       const z = FOREST_Z_MIN + (gz + 0.5) * cell + jz;
 
-      const distSeine = distanceToSeine(x, z, SEINE_POINTS);
+      const distSeine = distanceToSeine(x, z);
       if (distSeine < SEINE_TREE_MARGIN) continue;
 
       const uYear = urbanYear(x, z);

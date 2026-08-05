@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { YEAR_MIN, YEAR_MAX } from "./timeline.js";
 import * as terrain from "./layers/terrain.js";
+import * as buildings from "./layers/buildings.js";
 import { createControls } from "./controls.js";
 import * as ui from "./ui.js";
 
@@ -40,7 +41,10 @@ const quality = { crowds: 1, trees: 1, rain: 1, boats: 1, shadows: 1 };
 const ctx = { scene, renderer, camera, quality };
 
 // Layer registry: each module exports init(ctx) and update(dt, state).
-const layers = [terrain];
+// buildings after terrain: it samples the *rendered* ground mesh
+// (groundHeightAt) to sit buildings on the real surface, so terrain's
+// init() (which builds that mesh) must have already run.
+const layers = [terrain, buildings];
 for (const layer of layers) {
   layer.init(ctx);
 }
@@ -139,6 +143,9 @@ window.__paris = {
   setYear,
   flyTo: (name, duration) => controls.flyTo(name, duration),
   camera,
+  buildingStats: () => buildings.stats(),
+  renderer,
+  scene,
 };
 
 // --- Main loop --------------------------------------------------------------

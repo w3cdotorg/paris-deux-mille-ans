@@ -220,6 +220,20 @@ function seineRelief(x, z) {
 }
 
 /**
+ * Distance from (x, z) to the Seine centerline, full course included (the
+ * off-map return loop as well as the on-map meander). Exported so that every
+ * layer needing a "is this over water?" test — terrain colouring, the forest
+ * mask, the building grid — asks the same question of the same polyline
+ * instead of each keeping its own copy of the segment math.
+ * @param {number} x
+ * @param {number} z
+ * @returns {number}
+ */
+export function distanceToSeine(x, z) {
+  return distanceToPolyline(x, z, SEINE_POINTS);
+}
+
+/**
  * Scene altitude at (x, z). 0 = Seine water level. Gentle deterministic
  * noise on a base plain, gaussian hills added, Seine valley subtracted.
  * @param {number} x
