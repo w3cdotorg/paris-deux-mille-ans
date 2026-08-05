@@ -253,6 +253,29 @@
   transform: translate(-50%, -50%) scale(1.12);
 }
 
+/*
+ * Guaranteed ≥48px hit area, independent of the button's visual size.
+ * The visual disc may shrink on narrow phones (see the max-width:520px
+ * query below) so 14 of them can fit without excessive overlap, but the
+ * tappable zone must never shrink with it — these are the primary
+ * affordance for a small child. ::before is generated content painted
+ * inside the button's own box (absolutely positioned, so it escapes the
+ * button's *visual* bounds without affecting layout); a pointer landing
+ * on it still resolves its `target` to the host <button>, so this is a
+ * real hit-area extension, not just a cosmetic square.
+ */
+.pdma-moment-btn::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  transform: translate(-50%, -50%);
+}
+
 .pdma-moment-btn.pdma-active {
   background: linear-gradient(160deg, rgba(255, 180, 84, 0.45), rgba(255, 123, 84, 0.3));
   border-color: rgba(255, 210, 140, 0.95);
@@ -309,12 +332,15 @@
     gap: 8px;
   }
   .pdma-moment-btn {
-    /* 14 stops can't each reach 48px on a narrow phone without overlapping
-       badly — the track itself (64px tall, full width, grab-anywhere-to-
-       scrub) is the real big touch target here; these are wayfinding dots
-       plus a precise-jump bonus for bigger screens / a parent's finger. */
-    width: 38px;
-    height: 38px;
+    /* Deliberately NOT shrinking width/height here (an earlier draft did,
+       but min-width/min-height:48px on the base rule already clamps the
+       box to 48px regardless — a smaller `width` here would be silently
+       overridden and misleading to read). 14 48px discs *do* overlap on a
+       narrow phone (~33px apart at 480px wide), which is the reviewed,
+       accepted trade-off: circular glass buttons tolerate overlap
+       gracefully, each keeps its own centered ::before hit area, and the
+       track itself remains grab-anywhere. Only the glyph shrinks a touch
+       for breathing room inside the (still 48px) circle. */
     font-size: 18px;
   }
 }
