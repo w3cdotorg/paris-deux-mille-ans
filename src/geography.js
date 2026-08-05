@@ -219,17 +219,45 @@ function seineRelief(x, z) {
   return trough + bank;
 }
 
+// Precomputed once: the on-map slice is what every "is this over water?"
+// caller actually wants (see distanceToSeine below) — slicing on every call
+// would otherwise allocate a fresh array per query, and this runs per ground
+// vertex / per cell.
+const SEINE_ONMAP_POINTS = SEINE_POINTS.slice(0, SEINE_ONMAP_COUNT);
+
 /**
- * Distance from (x, z) to the Seine centerline, full course included (the
- * off-map return loop as well as the on-map meander). Exported so that every
- * layer needing a "is this over water?" test — terrain colouring, the forest
- * mask, the building grid — asks the same question of the same polyline
- * instead of each keeping its own copy of the segment math.
+ * Distance from (x, z) to the Seine centerline — the on-map meander only
+ * (SEINE_ONMAP_COUNT points). Exported so that every layer needing a "is
+ * this over water?" test — terrain colouring, the forest mask, the building
+ * grid — asks the same question of the same polyline instead of each keeping
+ * its own copy of the segment math.
+ *
+ * Deliberately excludes the off-map return loop: those points are a
+ * stylized, attenuated flourish for the river ribbon's tail (see
+ * SEINE_POINTS' comment), not a real waterway, but several of them pass
+ * close to rendered ground (e.g. near La Défense) — including them here
+ * used to paint a phantom second river swoosh across the western map and
+ * wrongly exclude buildable land there. Use distanceToSeineFull if a caller
+ * genuinely needs the complete polyline including the off-map tail.
  * @param {number} x
  * @param {number} z
  * @returns {number}
  */
 export function distanceToSeine(x, z) {
+  return distanceToPolyline(x, z, SEINE_ONMAP_POINTS);
+}
+
+/**
+ * Distance from (x, z) to the Seine centerline, full course included (the
+ * off-map return loop as well as the on-map meander). Rarely needed — most
+ * callers want distanceToSeine's on-map-only behavior above; this exists for
+ * the rare case of a renderer that draws the off-map tail itself and needs
+ * to know how close it runs to a given point.
+ * @param {number} x
+ * @param {number} z
+ * @returns {number}
+ */
+export function distanceToSeineFull(x, z) {
   return distanceToPolyline(x, z, SEINE_POINTS);
 }
 

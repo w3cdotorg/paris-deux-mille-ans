@@ -64,10 +64,15 @@ const GRID_X_MAX = 444;
 const GRID_Z_MIN = -516;
 const GRID_Z_MAX = 356;
 
-// Ligne de façade, mesurée depuis le centre de cellule. Deux îlots voisins se
-// font donc face à 6,5 unités, soit une rue de 1,5 unité (15 m).
-const FACADE_LINE = 3.25;
+// Ligne de façade, mesurée depuis le centre de cellule. Relevée de 3,25 à
+// 3,55 (review Critical 1b) : à 3,25, l'enveloppe périmétrique ne pouvait
+// physiquement pas dépasser ~52% de la surface de cellule, quel que soit le
+// nombre de bâtiments posés dessus — un plafond bien en-deçà de la cible de
+// couverture. Deux îlots voisins se font donc face à 4,9 unités, soit une
+// rue de 0,9 unité (9 m, une rue étroite mais plausible dans le tissu ancien).
+const FACADE_LINE = 3.55;
 const EDGE_SPAN = 0.78; // fraction de l'arête utilisable (évite les angles pile)
+const PARTY_WALL_SEAM = 0.04; // interstice entre deux bâtiments contigus (mur mitoyen)
 
 const WATER_MARGIN = 9; // pas de bâti à moins de 9 unités de l'axe de la Seine
 const SINK = 0.12; // enfoncement dans le sol, masque l'erreur d'échantillonnage
@@ -77,15 +82,28 @@ const CORE = { x: -30, z: -40 };
 const DENSITY_FULL_R = 130;
 const DENSITY_ZERO_R = 640;
 
+// Rééquilibré vers le coeur (review Critical 1c) : COUNT_CORE relevé et
+// COUNT_EDGE/VOID_EDGE resserrés pour que le budget total d'instances
+// (≤40 000, voir detailCapacities) finance surtout le tissu haussmannien
+// dense du centre plutôt que d'être dilué uniformément jusqu'aux faubourgs.
 const VOID_CORE = 0.18; // part de cellules non bâties (rues larges, cours, places)
-const VOID_EDGE = 0.52;
-const COUNT_CORE = [4, 7]; // min/max de bâtiments par cellule bâtie, au coeur
-const COUNT_EDGE = [3, 5]; // ... et en périphérie
+const VOID_EDGE = 0.78;
+const COUNT_CORE = [9, 12]; // min/max de bâtiments par cellule bâtie, au coeur
+const COUNT_EDGE = [2, 3]; // ... et en périphérie
 
-// LOD. Le brief demande la bascule « au-delà de ~350 unités de caméra » ;
-// 320 laisse une marge sous la cible tout en gardant le détail bien au-delà
-// du champ utile en vue rapprochée (preset `cite` : distance 80).
-const DETAIL_RADIUS = 320;
+// LOD. Le brief demande la bascule « au-delà de ~350 unités de caméra ».
+// Resserré de 320 à 240 (review Critical 1) : le rééquilibrage du budget vers
+// le coeur (COUNT_CORE relevé ci-dessus) déplace des instances des faubourgs
+// vers le coeur, mais ne change rien au *rayon* auquel le coeur bascule en
+// détail — à 320, la vue toits (`cite`, distance 80) englobait ~27k instances
+// de détail (contre ~18,4k dans le budget d'origine avant ce fix), ce qui
+// dégradait le fps mesuré. 240 ramène ce nombre à ~18,5k — quasi identique au
+// budget déjà validé — tout en restant largement au-delà du champ utile en
+// vue rapprochée (bien plus que la distance de caméra 80 du preset `cite`) ;
+// la couverture du coeur, elle, vient de la géométrie des cellules (placeCell)
+// et de FACADE_LINE/COUNT_CORE, pas du rayon de LOD, donc rester généreux ici
+// ne coûte rien à la cible de couverture ≥60%.
+const DETAIL_RADIUS = 240;
 const LOD_INTERVAL = 0.12; // secondes entre deux réévaluations de la bascule
 
 // ============================================================================
@@ -295,6 +313,15 @@ export function fabricAt(uYear, year, density, insideRing, seed) {
     // Le re-clad haussmannien est une opération intra-muros : hors enceinte
     // de Thiers, seuls quelques immeubles de rapport isolés y passent.
     if (epoch.family === "haussmann" && !insideRing) share = 0.1;
+    // Réciproquement (review Critical 2) : la reconstruction « moderne » est
+    // une opération de périphérie/banlieue — le coeur historique intra-muros
+    // est protégé (secteur sauvegardé de facto). Sans ce verrou, le seul
+    // decay par densité (share = [0.24 faubourg, 0.05 coeur]) laissait encore
+    // 5-15% de tours de verre sur du bâti d'origine médiévale *dans* l'enceinte
+    // de Thiers — des tours à Notre-Dame. Le même facteur ×0.1 que le
+    // re-clad haussmannien hors enceinte, en miroir : quelques opérations
+    // isolées restent possibles, mais plus l'écrasante majorité.
+    if (epoch.family === "moderne" && insideRing) share *= 0.06;
     if (roll(seed, 1300 + k * 11) < share) {
       index = k;
       born = gate;
@@ -313,10 +340,18 @@ export function fabricAt(uYear, year, density, insideRing, seed) {
  * @returns {number}
  */
 export function cellBuildingCount(ix, iz, density) {
-  const voidShare = lerp(VOID_EDGE, VOID_CORE, density);
+  // Rééquilibrage du budget vers le coeur (review Critical 1c) : un lerp
+  // *linéaire* en densité étale le relèvement de COUNT_CORE sur toute la
+  // moitié haute de la densité, ce qui regonfle aussi le nombre moyen de
+  // bâtiments des faubourgs à densité moyenne — exactement ce qu'on essaie
+  // d'éviter. En élevant la densité au carré avant l'interpolation, la bande
+  // coeur (densité proche de 1) reçoit l'essentiel du relèvement tandis que
+  // les faubourgs (densité ~0,3-0,7) restent proches de COUNT_EDGE/VOID_EDGE.
+  const t = density * density;
+  const voidShare = lerp(VOID_EDGE, VOID_CORE, t);
   if (hash01(ix, iz, 101) < voidShare) return 0;
-  const min = Math.round(lerp(COUNT_EDGE[0], COUNT_CORE[0], density));
-  const max = Math.round(lerp(COUNT_EDGE[1], COUNT_CORE[1], density));
+  const min = Math.round(lerp(COUNT_EDGE[0], COUNT_CORE[0], t));
+  const max = Math.round(lerp(COUNT_EDGE[1], COUNT_CORE[1], t));
   return min + Math.floor(hash01(ix, iz, 202) * (max - min + 1));
 }
 
@@ -375,24 +410,24 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
   const sinR = Math.sin(cellRot);
   const out = [];
 
+  // Empaquetage contigu par arête (review Critical 1a) : chaque arête a son
+  // propre curseur, qui avance de la largeur réelle du bâtiment (w*scale)
+  // plus un interstice de mur mitoyen à chaque pose — au lieu de répartir
+  // uniformément 1/count le long du périmètre sans égard à la largeur des
+  // bâtiments, ce qui laissait ~46% de la façade vide entre des bâtiments
+  // étroits. Les bâtiments sont distribués aux 4 arêtes en tournant (round
+  // robin) selon leur rang de pose.
+  const edgeHalf = FACADE_LINE * EDGE_SPAN;
+  const cursor = [-edgeHalf, -edgeHalf, -edgeHalf, -edgeHalf];
+
   for (let slot = 0; slot < count; slot++) {
     const seed = seedOf(ix, iz, slot);
     const { family, born } = fabricAt(uYear, year, density, insideRing, seed);
-
-    // Position sur le périmètre : les emplacements se répartissent
-    // régulièrement sur les 4 arêtes, avec un petit décalage aléatoire.
-    const u = ((slot + 0.5 + (roll(seed, 11) - 0.5) * 0.6) / count) * 4;
-    const edge = Math.floor(u) & 3;
-    const s = ((u - Math.floor(u)) * 2 - 1) * EDGE_SPAN;
-    const atCorner = Math.abs(s) > 0.55 * EDGE_SPAN;
+    const edge = slot & 3;
 
     const options = ARCHETYPES_BY_FAMILY[family];
     let archetype = pickArchetype(options, seed);
-    // Un immeuble d'angle à pan coupé aux angles d'îlot haussmanniens.
-    if (family === "haussmann" && atCorner && roll(seed, 29) < 0.55) {
-      archetype = ARCHETYPES_BY_FAMILY.haussmann[4]; // haussmann_angle
-    }
-    const spec = ARCHETYPES[archetype];
+    const pickedSpec = ARCHETYPES[archetype];
 
     // Base relevé de 0.88 à 1.0 par rapport à l'origine : à la distance de LOD
     // (macro-quartier, boîte simplifiée), chaque bâtiment ne couvre que
@@ -406,6 +441,20 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
     const jitterY = family === "medieval" ? 0.3 : family === "haussmann" ? 0.09 : 0.18;
     const scaleY = scale * (1 - jitterY / 2 + roll(seed, 37) * jitterY);
 
+    // Avance le curseur de cette arête de la largeur réelle du bâtiment
+    // (avant tout remplacement d'archétype d'angle ci-dessous) + le mur
+    // mitoyen : c'est ce qui rend le mur de rue contigu.
+    const along = pickedSpec.w * scale;
+    const s = cursor[edge] + along / 2;
+    cursor[edge] += along + PARTY_WALL_SEAM;
+    const atCorner = Math.abs(s) > 0.72 * edgeHalf;
+
+    // Un immeuble d'angle à pan coupé aux angles d'îlot haussmanniens.
+    if (family === "haussmann" && atCorner && roll(seed, 29) < 0.55) {
+      archetype = ARCHETYPES_BY_FAMILY.haussmann[4]; // haussmann_angle
+    }
+    const spec = ARCHETYPES[archetype];
+
     // Façade sur la ligne de rue, profondeur vers l'intérieur de l'îlot.
     const depth = (spec.d * scale) / 2;
     const inner = FACADE_LINE - depth;
@@ -413,20 +462,20 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
     let lz;
     let yaw;
     if (edge === 0) {
-      lx = s * FACADE_LINE;
+      lx = s;
       lz = -inner;
       yaw = Math.PI;
     } else if (edge === 1) {
       lx = inner;
-      lz = s * FACADE_LINE;
+      lz = s;
       yaw = Math.PI / 2;
     } else if (edge === 2) {
-      lx = -s * FACADE_LINE;
+      lx = -s;
       lz = inner;
       yaw = 0;
     } else {
       lx = -inner;
-      lz = -s * FACADE_LINE;
+      lz = -s;
       yaw = -Math.PI / 2;
     }
 

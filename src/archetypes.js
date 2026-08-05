@@ -67,6 +67,11 @@ const PAL = {
   zinc: c(0x8d9298),
   zincDark: c(0x787e85),
   iron: c(0x3b4048),
+  // Balcon filant — gris moyen plutôt que le fer quasi noir d'origine : à
+  // ×2-3 bandeaux pleine largeur par archétype, l'iron 0x3b4048 peinturait
+  // des zébrures sombres sur toute la façade (review Important 4). Un gris
+  // moyen reste lisible comme ferronnerie sans écraser la pierre claire.
+  balconyIron: c(0x6b6f75),
   chimney: c(0x9c6a53),
   // moderne
   concrete: c(0xb7b4ab),
@@ -292,9 +297,14 @@ export const FAMILY_ORDER = ["gaulois", "romain", "medieval", "classique", "haus
 // build(b) (géométrie détaillée), et les champs `lod*` qui décrivent la
 // version simplifiée (boîte + toit) utilisée au-delà de la distance de LOD.
 
-/** Bandeau de balcon filant : fine boîte débordant légèrement de la façade. */
-function balcony(b, x0, x1, y, z0, z1, overhang = 0.07, thickness = 0.09) {
-  box(b, x0 - overhang, x1 + overhang, y, y + thickness, z0 - overhang, z1 + overhang, PAL.iron);
+/**
+ * Bandeau de balcon filant : fine boîte débordant légèrement de la façade.
+ * Gris moyen, fin et peu débordant (review Important 4 : l'ancien iron quasi
+ * noir + débord 0.07 + épaisseur 0.09, répété ×2-3 par archétype, peignait
+ * des zébrures sombres pleine largeur plutôt qu'une ferronnerie discrète).
+ */
+function balcony(b, x0, x1, y, z0, z1, overhang = 0.03, thickness = 0.05, col = PAL.balconyIron) {
+  box(b, x0 - overhang, x1 + overhang, y, y + thickness, z0 - overhang, z1 + overhang, col);
 }
 
 /** Rangée de souches de cheminée le long du faîtage. */
@@ -649,8 +659,9 @@ const ARCHETYPES = [
     build(b) {
       box(b, -1.0, 1.0, 0, 2.04, -0.78, 0.78, PAL.hStone);
       box(b, -1.02, 1.02, 0, 0.32, -0.8, 0.8, PAL.hStoneCool);
+      // Max 2 bandeaux de balcon par archétype (review Important 4) : on
+      // garde le 2e et le 6e étage, on abandonne celui du milieu.
       balcony(b, -1.0, 1.0, 0.62, -0.78, 0.78);
-      balcony(b, -1.0, 1.0, 1.22, -0.78, 0.78);
       balcony(b, -1.0, 1.0, 1.74, -0.78, 0.78);
       box(b, -1.05, 1.05, 2.0, 2.1, -0.83, 0.83, PAL.hStoneCool);
       frustum(b, -1.03, 1.03, 2.1, 2.44, -0.81, 0.81, 0.26, 0.25, PAL.zinc, null);
@@ -703,8 +714,10 @@ const ARCHETYPES = [
       const grow = (p, k) => p.map(([x, z]) => [x * k, z * k]);
       prism(b, poly, 0, 1.8, PAL.hStone, null);
       prism(b, grow(poly, 1.02), 0, 0.3, PAL.hStoneCool, null);
-      prism(b, grow(poly, 1.06), 0.62, 0.71, PAL.iron, null);
-      prism(b, grow(poly, 1.06), 1.46, 1.55, PAL.iron, null);
+      // Bandeaux de balcon filant : gris moyen, fin, faible débord — même
+      // traitement que balcony() ci-dessus (review Important 4).
+      prism(b, grow(poly, 1.03), 0.62, 0.67, PAL.balconyIron, null);
+      prism(b, grow(poly, 1.03), 1.46, 1.51, PAL.balconyIron, null);
       prism(b, grow(poly, 1.05), 1.76, 1.86, PAL.hStoneCool, null);
       prism(b, grow(poly, 1.0), 1.86, 2.16, PAL.zinc, null);
       prism(b, grow(poly, 0.74), 2.16, 2.24, PAL.zinc, PAL.zincDark);

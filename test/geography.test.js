@@ -8,6 +8,8 @@ import {
   ISLANDS,
   heightAt,
   urbanYear,
+  distanceToSeine,
+  distanceToSeineFull,
 } from "../src/geography.js";
 
 // ============================================================================
@@ -86,6 +88,27 @@ test("geography: SEINE_POINTS exposes the on-map meander control points verbatim
     { x: -520, z: 33 },
     { x: -586, z: 292 },
   ]);
+});
+
+// ============================================================================
+// distanceToSeine — must ignore the off-map return loop (review Important 3:
+// "phantom second river"). The full-course variant stays available for the
+// rare caller that draws the tail itself.
+// ============================================================================
+
+test("geography: distanceToSeine ignores the off-map return loop near La Défense", () => {
+  // (-750, 150) sits far from the real, on-map river course but close to the
+  // off-map return loop's westward bulge (-742, 300)-(-788, 110). Before the
+  // fix, distanceToSeine used the full 18-point polyline and read this point
+  // as practically on the riverbank — painting a phantom second river swoosh
+  // and wrongly excluding nearby land as unbuildable.
+  const d = distanceToSeine(-750, 150);
+  assert.ok(d > 50, `distanceToSeine(-750, 150) = ${d}, expected > 50`);
+  // Sanity check: the full-course variant genuinely does read this point as
+  // close to the (stylized, off-map) loop — confirming the two functions
+  // differ for the reason this test exists, not by coincidence.
+  const dFull = distanceToSeineFull(-750, 150);
+  assert.ok(dFull < d, `expected distanceToSeineFull (${dFull}) < distanceToSeine (${d})`);
 });
 
 test("geography: SEINE_POINTS extends past the map with the off-map return loop toward La Défense", () => {

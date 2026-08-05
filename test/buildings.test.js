@@ -11,6 +11,7 @@ import {
   cellCenterZ,
 } from "../src/layers/buildings.js";
 import { ARCHETYPES, ARCHETYPES_BY_FAMILY, FAMILY_ORDER } from "../src/archetypes.js";
+import { urbanYear } from "../src/geography.js";
 
 // ============================================================================
 // familyForUrbanYear — the brief's origin bands (gaulois<0, romain<500,
@@ -104,14 +105,38 @@ test("fabricAt: at a year before any reconstruction epoch, the origin family sur
   }
 });
 
+test("fabricAt: moderne reconstruction is hard-suppressed inside the ring (review Critical 2)", () => {
+  // Before the fix, only densityAt() decayed the moderne share (no ring
+  // gate at all), which measured 5-15% moderne share on medieval-origin
+  // cells inside the ring — glass towers a stone's throw from Notre-Dame.
+  // Sample across a spread of intra-ring densities (the ring's outer reaches
+  // do touch density 0) and confirm the 2026 moderne share stays under 2%,
+  // mirroring the symmetric haussmann-outside-the-ring gate above.
+  let moderne = 0;
+  let total = 0;
+  const densities = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+  const trialsPerDensity = 2000;
+  for (const density of densities) {
+    for (let seed = 0; seed < trialsPerDensity; seed++) {
+      const { family } = fabricAt(1300, 2026, density, true, seed * 2654435761);
+      total++;
+      if (family === "moderne") moderne++;
+    }
+  }
+  const share = moderne / total;
+  assert.ok(share < 0.02, `expected <2% moderne share inside the ring, got ${(share * 100).toFixed(2)}%`);
+});
+
 // ============================================================================
 // cellBuildingCount — bounds per the brief ("4 à 10 bâtiments")
 // ============================================================================
 
-test("cellBuildingCount: every non-zero count across a wide sample falls in [3, 9]", () => {
-  // The implementation's tunables (COUNT_CORE=[4,7], COUNT_EDGE=[3,5]) sit
-  // inside the brief's illustrative 4-10 range; the binding invariant tested
-  // here is that counts are always small, positive integers, never absurd.
+test("cellBuildingCount: every non-zero count across a wide sample falls in [2, 12]", () => {
+  // The implementation's tunables (COUNT_CORE=[9,12], COUNT_EDGE=[2,3]) were
+  // rebalanced toward the core (review Critical 1c) to fund the near-
+  // continuous street-front coverage at the historic core within the same
+  // ≤40k instance budget; the binding invariant tested here is just that
+  // counts stay small, positive integers, never absurd.
   let min = Infinity;
   let max = -Infinity;
   let sawZero = false;
@@ -128,8 +153,8 @@ test("cellBuildingCount: every non-zero count across a wide sample falls in [3, 
     }
   }
   assert.ok(sawZero, "expected some cells to be void (streets/places/courtyards)");
-  assert.ok(min >= 3, `min count ${min} below the documented floor`);
-  assert.ok(max <= 9, `max count ${max} above the documented ceiling`);
+  assert.ok(min >= 2, `min count ${min} below the documented floor`);
+  assert.ok(max <= 12, `max count ${max} above the documented ceiling`);
 });
 
 test("cellBuildingCount: higher density never yields a strictly lower ceiling than lower density, same cell", () => {
@@ -179,6 +204,20 @@ test("isBuildableCell: excludes cells inside landmark clearances (e.g. Notre-Dam
 
 test("isBuildableCell: excludes cells inside a declared open space (e.g. Tuileries)", () => {
   assert.equal(isBuildableCell(-164, -115, -300, 2026), false);
+});
+
+test("isBuildableCell: a non-water cell near La Défense is buildable (review Important 3)", () => {
+  // (-800, -433) sits inside the La Défense urbanization cluster (center
+  // -834,-433, r=60; clear of the laDefense landmark clearance, r=11) and
+  // far from the real Seine course. Before the fix, isBuildableCell's
+  // WATER_MARGIN check ran on the full 18-point Seine polyline, whose
+  // off-map return loop passes right by La Défense (-855,-395) — wrongly
+  // reading this land as riverbank and excluding it from the buildable grid.
+  const x = -800;
+  const z = -433;
+  const uYear = urbanYear(x, z);
+  assert.ok(uYear <= 2026, `expected (${x},${z}) to already be urbanized by 2026, got uYear=${uYear}`);
+  assert.equal(isBuildableCell(x, z, uYear, 2026), true);
 });
 
 // ============================================================================
