@@ -42,8 +42,9 @@
  */
 
 import * as THREE from "three";
-import { urbanYear, distanceToSeine, RINGS, LANDMARKS } from "../geography.js";
-import { lerp, smoothstep } from "../timeEngine.js";
+import { urbanYear, distanceToSeine, RINGS, LANDMARKS, ISLANDS } from "../geography.js";
+import { lerp, smoothstep, lifecycle, easeOutBack } from "../timeEngine.js";
+import { YEAR_MAX } from "../timeline.js";
 import { groundHeightAt } from "./terrain.js";
 import {
   ARCHETYPES,
@@ -114,14 +115,35 @@ const COUNT_EDGE = [2, 2]; // ... et en périphérie
 // vers le coeur, mais ne change rien au *rayon* auquel le coeur bascule en
 // détail — à 320, la vue toits (`cite`, distance 80) englobait ~27k instances
 // de détail (contre ~18,4k dans le budget d'origine avant ce fix), ce qui
-// dégradait le fps mesuré. 240 ramène ce nombre à ~18,5k — quasi identique au
-// budget déjà validé — tout en restant largement au-delà du champ utile en
-// vue rapprochée (bien plus que la distance de caméra 80 du preset `cite`) ;
-// la couverture du coeur, elle, vient de la géométrie des cellules (placeCell)
-// et de FACADE_LINE/COUNT_CORE, pas du rayon de LOD, donc rester généreux ici
-// ne coûte rien à la cible de couverture ≥60%.
-const DETAIL_RADIUS = 240;
+// dégradait le fps mesuré. 240 ramène ce nombre à ~18,5k.
+//
+// Resserré une deuxième fois, 240 → 150 (tâche 8) : `repackDetail` compacte,
+// par quartier actif, *tout* l'historique d'une parcelle (chaque étape de
+// `expandHistory`, y compris les étapes déjà démolies — masquées par une
+// matrice à échelle nulle, mais toujours dans `mesh.count`, donc toujours
+// transformées par le vertex shader), pas seulement le bâti *présent* à
+// l'année courante — un compromis délibéré (voir la note « présence et LOD »
+// plus bas) pour ne pas coupler le compactage spatial au dirty-tracking
+// temporel. Sur la ville figée (~38,7k bâtiments réellement visibles en
+// 2026) l'historique complet pèse ~84,3k lignes ; au rayon 240 déjà mesuré
+// à ~18,5k au preset `cite`, ce même point de vue englobait après la tâche
+// 8 ~42,7k instances détail (vertex shader ×2,3), avec un fps mesuré en
+// scrub tombé à la limite basse (~40) de la cible. 150 ramène ce nombre à
+// ~19,5k — quasi identique au budget d'origine — tout en restant largement
+// au-delà de la distance de caméra 80 du preset `cite`.
+const DETAIL_RADIUS = 150;
 const LOD_INTERVAL = 0.12; // secondes entre deux réévaluations de la bascule
+
+// Tâche 8 — cycle de vie temporel. Un bâtiment met BUILD_YEARS à sortir de
+// terre (scale Y 0→1, léger overshoot) et RAZE_YEARS à disparaître quand il
+// est remplacé ; en choisissant la même durée pour les deux et en faisant
+// coïncider exactement `died` de l'ancien bâti avec `born` du nouveau (voir
+// `expandHistory`), la présence de l'ancien (1→0) et celle du nouveau (0→1)
+// se somment à *exactement* 1 tout au long de la fenêtre : un crossgrow, pas
+// un crossfade — l'ancien rétrécit pendant que le nouveau pousse à sa place.
+const BUILD_YEARS = 8;
+const RAZE_YEARS = 8;
+const GROWTH_OVERSHOOT = 1.2; // "léger overshoot" — voir easeOutBack (timeEngine.js)
 
 // ============================================================================
 // Espaces ouverts et dégagements
@@ -146,8 +168,22 @@ const OPEN_SPACES = [
 
 // Dégagements autour des monuments, pour que les maillages des tâches
 // suivantes (repères, monuments) ne se plantent pas dans un îlot.
+//
+// notreDame abaissé de 7 à 5,5 (tâche 8) : sur une île de la Cité large de
+// seulement ~10 unités (rz=5, voir ISLANDS dans geography.js), un dégagement
+// de 7 recouvrait la totalité des cellules dont le centre tombe dans
+// l'ellipse -250 de la Cité (distance mesurée : 5,657 pour les 4 cellules
+// candidates) — aucune ne restait constructible, donc aucune hutte gauloise
+// n'apparaissait *jamais*, à aucune année, y compris 2026. Or c'est
+// précisément là que la ville commence (voir aussi l'exemption d'île
+// ci-dessous) : sans ce fix, le premier bâtiment de tout Paris n'apparaît que
+// vers l'an 100 (le disque romain rive gauche), laissant les 300 premières
+// années de la frise (-250 à ~50, 13% de toute la ligne du temps) sans la
+// moindre construction — pas franchement « spectaculaire ». 5,5 reste un
+// dégagement confortable (55 m) pour le futur maillage de la cathédrale tout
+// en laissant les 4 cellules de la Cité constructibles.
 const LANDMARK_CLEARANCE = {
-  notreDame: 7,
+  notreDame: 5.5,
   louvre: 22,
   bastille: 6,
   tourEiffel: 12,
@@ -317,13 +353,58 @@ export function familyForUrbanYear(uYear) {
  *   construction du bâti courant (utile à la tâche 8 pour l'animation).
  */
 export function fabricAt(uYear, year, density, insideRing, seed) {
-  let index = EPOCH_INDEX[familyForUrbanYear(uYear)];
-  let born = Math.max(uYear, EPOCHS[index].year);
+  const history = fabricHistoryAt(uYear, density, insideRing, seed, year);
+  const last = history[history.length - 1];
+  return { family: last.family, born: last.born };
+}
 
-  for (let k = index + 1; k < EPOCHS.length; k++) {
+/**
+ * Jitter (tâche 8) appliqué à l'année de naissance du bâti *d'origine* d'une
+ * parcelle : une parcelle n'est pas bâtie littéralement l'année où le sol
+ * devient urbanisable (`urbanYear`), mais dans les décennies qui suivent —
+ * d'où `born = uYear + jitter(0..40 ans)`, déterministe par graine. C'est ce
+ * décalage qui, agrégé sur toute la grille, étale la vague de construction
+ * plutôt que de la faire apparaître d'un coup à chaque année de urbanYear.
+ * @param {number} seed
+ * @returns {number} dans [0, 40)
+ */
+export function originJitter(seed) {
+  return roll(seed, 977) * 40;
+}
+
+/**
+ * Historique complet du bâti d'une parcelle, de sa construction d'origine
+ * jusqu'à `endYear` (par défaut YEAR_MAX = 2026, c'est-à-dire *tout* ce que
+ * cette parcelle aura jamais vu) : une naissance (bâti d'origine, dont
+ * l'année suit `originJitter` ci-dessus) puis zéro ou plusieurs reconstructions
+ * — une entrée par époque de EPOCHS dont le tirage a réussi, dans l'ordre
+ * chronologique. C'est le même mécanisme de tirage que `fabricAt` (dont c'est
+ * maintenant la brique de base, voir plus haut), généralisé pour *garder*
+ * chaque étape plutôt que de n'en renvoyer que la dernière : la tâche 8 a
+ * besoin de savoir qu'une parcelle médiévale a pu être romaine avant, pas
+ * seulement de son état final en 2026.
+ *
+ * `died` de chaque entrée (ajouté par l'appelant, voir `expandHistory`) sera
+ * exactement `born` de l'entrée suivante : c'est ce qui fait du re-clad un
+ * *crossgrow* (l'ancien rétrécit pendant que le nouveau pousse, la somme des
+ * deux présences valant exactement 1 tout au long de la transition) plutôt
+ * qu'un crossfade ou qu'un trou.
+ * @param {number} uYear - urbanYear de la cellule
+ * @param {number} density - densityAt du centre de cellule, dans [0,1]
+ * @param {boolean} insideRing - dans l'enceinte de Thiers (le périphérique)
+ * @param {number} seed - graine du bâtiment (voir seedOf)
+ * @param {number} [endYear] - n'inclut aucune reconstruction postérieure
+ * @returns {Array<{family: string, born: number}>} au moins une entrée
+ */
+export function fabricHistoryAt(uYear, density, insideRing, seed, endYear = YEAR_MAX) {
+  const index0 = EPOCH_INDEX[familyForUrbanYear(uYear)];
+  const born0 = uYear + originJitter(seed); // originJitter >= 0, so born0 >= uYear always
+  const history = [{ family: EPOCHS[index0].family, born: born0 }];
+
+  for (let k = index0 + 1; k < EPOCHS.length; k++) {
     const epoch = EPOCHS[k];
     const gate = epoch.year + roll(seed, 900 + k * 7) * epoch.spread;
-    if (gate > year || gate < uYear) continue;
+    if (gate > endYear || gate < uYear) continue;
     let share = Array.isArray(epoch.share)
       ? lerp(epoch.share[0], epoch.share[1], density)
       : epoch.share;
@@ -340,11 +421,10 @@ export function fabricAt(uYear, year, density, insideRing, seed) {
     // isolées restent possibles, mais plus l'écrasante majorité.
     if (epoch.family === "moderne" && insideRing) share *= 0.06;
     if (roll(seed, 1300 + k * 11) < share) {
-      index = k;
-      born = gate;
+      history.push({ family: epoch.family, born: gate });
     }
   }
-  return { family: EPOCHS[index].family, born };
+  return history;
 }
 
 /**
@@ -373,6 +453,31 @@ export function cellBuildingCount(ix, iz, density) {
 }
 
 /**
+ * Île de la Cité / Saint-Louis : terrain sec en permanence (voir
+ * `constantIslandDelta` dans terrain.js, qui les surélève indépendamment du
+ * relief de base), pas une berge boueuse — `WATER_MARGIN` ci-dessous, pensé
+ * pour tenir le bâti à distance de l'eau *courante*, exclurait sinon la
+ * totalité de ces îles (elles sont, par nature, à moins de 9 unités de l'axe
+ * du fleuve de tous les côtés). Louviers (île « morte » en 1843, voir
+ * ISLANDS) volontairement exclue de cette exemption : son bras mort et sa
+ * disparition programmée en font un cas à part, pas un simple confort de
+ * berge.
+ */
+function onPermanentIsland(x, z) {
+  return (
+    insideEllipse(x, z, ISLANDS.cite.x, ISLANDS.cite.z, ISLANDS.cite.rx, ISLANDS.cite.rz) ||
+    insideEllipse(
+      x,
+      z,
+      ISLANDS.saintLouis.x,
+      ISLANDS.saintLouis.z,
+      ISLANDS.saintLouis.rx,
+      ISLANDS.saintLouis.rz
+    )
+  );
+}
+
+/**
  * Cellule constructible ? Exclut l'eau, les grands espaces ouverts, les
  * dégagements de monuments, et tout ce qui n'est pas encore urbanisé.
  * @param {number} x - centre de cellule
@@ -383,7 +488,7 @@ export function cellBuildingCount(ix, iz, density) {
  */
 export function isBuildableCell(x, z, uYear, year) {
   if (!(uYear <= year)) return false; // couvre aussi uYear === Infinity
-  if (distanceToSeine(x, z) < WATER_MARGIN) return false;
+  if (distanceToSeine(x, z) < WATER_MARGIN && !onPermanentIsland(x, z)) return false;
   for (const space of OPEN_SPACES) {
     if (insideEllipse(x, z, space.x, space.z, space.rx, space.rz)) return false;
   }
@@ -587,9 +692,11 @@ const B = {
   archetype: null, // Uint8Array
   tint: null, // Uint8Array
   family: null, // Uint8Array (index dans FAMILY_ORDER)
-  uYear: null, // Float32Array — urbanYear de la cellule (tâche 8)
-  born: null, // Float32Array — année de construction du bâti courant (tâche 8)
-  seed: null, // Uint32Array — rejoue tous les tirages (tâche 8)
+  uYear: null, // Float32Array — urbanYear de la cellule
+  born: null, // Float32Array — année de naissance de *cette* étape du bâti
+  died: null, // Float32Array — année de remplacement (Infinity = dernière étape, tient jusqu'en 2026)
+  seed: null, // Uint32Array — rejoue tous les tirages
+  visGrow: null, // Float32Array — facteur de croissance courant (easeOutBack(presence)), 0 = invisible
 };
 
 const districts = {
@@ -606,12 +713,27 @@ const districts = {
 // CSR (archetype, quartier) -> plage contiguë d'instances dans B.
 const ranges = { start: null, len: null, archStart: null, archCount: null };
 
+// Index triés par born / died (tâche 8) : permettent de ne visiter, à chaque
+// changement d'année, que les instances dont la fenêtre de construction
+// [born, born+BUILD_YEARS) ou de démolition [died, died+RAZE_YEARS) recoupe
+// le balayage [ancienne année, nouvelle année] — tout le reste a une présence
+// prouvablement inchangée sur ce balayage (voir `applyYear`), donc jamais
+// visité. Deux Int32Array d'indices dans B, chacun trié par la valeur
+// correspondante.
+let bornOrder = null;
+let diedOrder = null;
+// -1 si l'instance n'est pas actuellement compactée dans le mesh de détail de
+// son archétype ; sinon son slot dans ce mesh. Rempli par `repackDetail`,
+// consommé par `applyYear` pour savoir si une instance modifiée doit aussi
+// être réécrite dans le détail (en plus du LOD, toujours à jour).
+let detailSlotOf = null;
+let lastAppliedYear = -Infinity; // force un balayage complet au premier appel
+
 const meshes = { detail: [], lod: [] };
 let material = null;
 let overflow = 0; // instances détail sautées faute de capacité (diagnostic)
 let lodTimer = 0;
 let changedList = null;
-let lastYear = null;
 
 const _matrix = new THREE.Matrix4();
 const _quat = new THREE.Quaternion();
@@ -632,13 +754,74 @@ function districtOf(ix, iz) {
 }
 
 /**
- * Parcourt la grille, place les bâtiments, puis range les instances par
- * (archétype, quartier) — un tri par comptage, pour que chaque paire soit une
- * plage contiguë : c'est ce qui rend la bascule de LOD triviale (une plage à
- * remettre à zéro) et le repack du détail séquentiel.
- * @param {number} year
+ * Étend un bâtiment placé (une position/orientation/gabarit fixes, voir
+ * `placeCell`) en une ou plusieurs *étapes* — son historique complet de
+ * `fabricHistoryAt` — chacune devenant une entrée séparée dans `raw` avec
+ * son propre archétype/teinte/hauteur/born/died. Toutes les étapes d'une
+ * même parcelle partagent x/z/rot/scale (même empreinte au sol : le re-clad
+ * remplace un bâtiment par un autre au même endroit, il ne déplace rien) ;
+ * seule la *dernière* étape réutilise l'archétype déjà choisi par `placeCell`
+ * (celui sur lequel l'ajustement de largeur d'arête s'est basé) — les étapes
+ * antérieures piochent leur propre archétype dans leur propre famille.
+ * `died` de chaque étape est le `born` de la suivante (ou Infinity pour la
+ * dernière) : c'est ce qui garantit le crossgrow (voir `fabricHistoryAt`).
+ * @param {object} p - un élément retourné par `placeCell`
+ * @param {number} density
+ * @param {boolean} insideRing
+ * @returns {Array<object>} une ou plusieurs "lignes" prêtes pour B
  */
-function generate(year) {
+function expandHistory(p, density, insideRing) {
+  const history = fabricHistoryAt(p.uYear, density, insideRing, p.seed);
+  const rows = [];
+  for (let s = 0; s < history.length; s++) {
+    const stage = history[s];
+    const isFinal = s === history.length - 1;
+    const archetype = isFinal
+      ? p.archetype
+      : pickArchetype(ARCHETYPES_BY_FAMILY[stage.family], p.seed);
+    const tint = isFinal ? p.tint : Math.floor(roll(p.seed, 1500 + s * 19) * 4) % 4;
+    let scaleY;
+    if (isFinal) {
+      scaleY = p.scaleY;
+    } else {
+      const jitterY =
+        stage.family === "medieval" ? 0.3 : stage.family === "haussmann" ? 0.09 : 0.18;
+      scaleY = p.scale * (1 - jitterY / 2 + roll(p.seed, 1600 + s * 19) * jitterY);
+    }
+    const died = s + 1 < history.length ? history[s + 1].born : Infinity;
+    rows.push({
+      x: p.x,
+      z: p.z,
+      rot: p.rot,
+      scale: p.scale,
+      scaleY,
+      archetype,
+      tint,
+      family: stage.family,
+      uYear: p.uYear,
+      born: stage.born,
+      died,
+      seed: p.seed,
+      district: p.district,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Parcourt la grille, place les bâtiments (une fois pour toutes, sur la base
+ * du tissu *final*, YEAR_MAX = 2026 — la position/le gabarit d'une parcelle
+ * ne changent pas dans le temps, seul son habillage change, voir
+ * `expandHistory`), développe l'historique de chacun, puis range les
+ * instances par (archétype, quartier) — un tri par comptage, pour que chaque
+ * paire soit une plage contiguë : c'est ce qui rend la bascule de LOD
+ * triviale (une plage à remettre à zéro) et le repack du détail séquentiel.
+ *
+ * Contrairement à la tâche 7, ceci ne s'exécute plus qu'une seule fois, à
+ * l'init : le temps (tâche 8) ne touche plus qu'à la *présence* de chaque
+ * instance déjà générée (voir `applyYear`), jamais à la géométrie elle-même.
+ */
+function generate() {
   const ixMin = Math.floor(GRID_X_MIN / CELL);
   const ixMax = Math.ceil(GRID_X_MAX / CELL);
   const izMin = Math.floor(GRID_Z_MIN / CELL);
@@ -658,7 +841,7 @@ function generate(year) {
     for (let ix = ixMin; ix <= ixMax; ix++) {
       const cx = cellCenterX(ix);
       const uYear = urbanYear(cx, cz);
-      if (!isBuildableCell(cx, cz, uYear, year)) continue;
+      if (!isBuildableCell(cx, cz, uYear, YEAR_MAX)) continue;
       const density = densityAt(cx, cz);
       const insideRing = insideEllipse(
         cx,
@@ -668,11 +851,12 @@ function generate(year) {
         peripherique.rx,
         peripherique.rz
       );
-      const placed = placeCell(ix, iz, uYear, year, density, insideRing);
+      const placed = placeCell(ix, iz, uYear, YEAR_MAX, density, insideRing);
+      const district = districtOf(ix, iz);
       for (const p of placed) {
         p.uYear = uYear;
-        p.district = districtOf(ix, iz);
-        raw.push(p);
+        p.district = district;
+        for (const row of expandHistory(p, density, insideRing)) raw.push(row);
       }
     }
   }
@@ -702,7 +886,9 @@ function generate(year) {
   B.family = new Uint8Array(n);
   B.uYear = new Float32Array(n);
   B.born = new Float32Array(n);
+  B.died = new Float32Array(n);
   B.seed = new Uint32Array(n);
+  B.visGrow = new Float32Array(n);
 
   const cursor = Int32Array.from(start);
   for (const p of raw) {
@@ -718,6 +904,7 @@ function generate(year) {
     B.family[i] = FAMILY_ORDER.indexOf(p.family);
     B.uYear[i] = p.uYear;
     B.born[i] = p.born;
+    B.died[i] = p.died;
     B.seed[i] = p.seed;
   }
 
@@ -747,6 +934,13 @@ function generate(year) {
     }
   }
   changedList = new Int32Array(districts.count);
+
+  // --- index temporels (tâche 8) : indices dans B triés par born / died -----
+  bornOrder = Int32Array.from({ length: n }, (_, i) => i);
+  bornOrder.sort((a, b) => B.born[a] - B.born[b]);
+  diedOrder = Int32Array.from({ length: n }, (_, i) => i);
+  diedOrder.sort((a, b) => B.died[a] - B.died[b]);
+  detailSlotOf = new Int32Array(n).fill(-1);
 }
 
 /**
@@ -819,11 +1013,25 @@ function buildMeshes(ctx) {
   }
 }
 
-/** Compose la matrice monde de l'instance i dans _matrix. */
+/**
+ * Compose la matrice monde de l'instance i dans _matrix — la seule fonction
+ * qui traduit l'état temporel (tâche 8, `B.visGrow`) en géométrie : un
+ * `visGrow` <= 0 (absent avant sa naissance, ou disparu après sa démolition)
+ * dégénère la matrice à l'échelle nulle (comme le fait déjà `_zero` pour le
+ * LOD spatial) — footprint *et* hauteur nuls, donc rien à l'écran plutôt
+ * qu'une empreinte plate posée sur le sol. Entre les deux, l'empreinte au sol
+ * (x/z, voir `placeCell`) reste toujours à sa taille pleine — seule la
+ * hauteur (y) grossit avec `visGrow`, « poussent depuis leurs fondations ».
+ */
 function composeInstance(i) {
+  const grow = B.visGrow[i];
+  if (grow <= 0) {
+    _matrix.copy(_zero);
+    return;
+  }
   _quat.setFromAxisAngle(UP, B.rot[i]);
   _pos.set(B.x[i], B.y[i], B.z[i]);
-  _scale.set(B.scale[i], B.scaleY[i], B.scale[i]);
+  _scale.set(B.scale[i], B.scaleY[i] * grow, B.scale[i]);
   _matrix.compose(_pos, _quat, _scale);
 }
 
@@ -833,27 +1041,6 @@ function setTint(mesh, slot, i) {
   const t = tints[B.tint[i]];
   _color.setRGB(t[0], t[1], t[2]);
   mesh.setColorAt(slot, _color);
-}
-
-/** Remplit une fois pour toutes les matrices/teintes de tous les LOD. */
-function fillLod() {
-  const nD = districts.count;
-  for (let a = 0; a < ARCHETYPES.length; a++) {
-    const mesh = meshes.lod[a];
-    const base = ranges.archStart[a];
-    for (let d = 0; d < nD; d++) {
-      const k = a * nD + d;
-      const from = ranges.start[k];
-      const to = from + ranges.len[k];
-      for (let i = from; i < to; i++) {
-        composeInstance(i);
-        mesh.setMatrixAt(i - base, _matrix);
-        setTint(mesh, i - base, i);
-      }
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }
 }
 
 /** Écrit (ou efface) la plage LOD d'un quartier selon son drapeau `active`. */
@@ -880,10 +1067,16 @@ function refreshLodDistrict(d) {
   }
 }
 
-/** Recompacte les InstancedMesh de détail sur les quartiers actifs. */
+/**
+ * Recompacte les InstancedMesh de détail sur les quartiers actifs. Remplit
+ * aussi `detailSlotOf` (tâche 8) : c'est ce qui permet à `applyYear` de savoir
+ * quelles instances, en plus de leur plage LOD (toujours à jour), doivent
+ * aussi être réécrites dans le mesh de détail quand leur croissance change.
+ */
 function repackDetail() {
   const nD = districts.count;
   overflow = 0;
+  detailSlotOf.fill(-1);
   for (let a = 0; a < ARCHETYPES.length; a++) {
     const mesh = meshes.detail[a];
     const capacity = mesh.instanceMatrix.count;
@@ -901,6 +1094,7 @@ function repackDetail() {
         composeInstance(i);
         mesh.setMatrixAt(slot, _matrix);
         setTint(mesh, slot, i);
+        detailSlotOf[i] = slot;
         slot++;
       }
     }
@@ -941,19 +1135,145 @@ function updateLod(camera) {
 // ============================================================================
 // Point d'entrée « année » (tâche 8)
 // ============================================================================
+//
+// La géométrie est figée pour toujours par `generate()` (appelé une seule
+// fois, à l'init) : ce qui change avec l'année, c'est uniquement la
+// *présence* de chaque instance déjà générée — `B.visGrow`, lu par
+// `composeInstance`. `applyYear` ne visite que les instances dont la présence
+// a pu changer entre l'ancienne et la nouvelle année (dirty-tracking par
+// plage, voir `bornOrder`/`diedOrder`), ce qui le rend assez bon marché pour
+// être appelé à *chaque frame* avec l'année exacte (non arrondie — la
+// croissance doit rester lisse pendant un scrub, pas saccadée par palier
+// d'année entière) plutôt que débattu comme le rescan de terrain.js.
+
+/** Première position dans `order` où `values[order[idx]] >= target`. */
+function lowerBound(order, values, target) {
+  let lo = 0;
+  let hi = order.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (values[order[mid]] < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Recompose et réécrit la matrice LOD (toujours) et détail (si compactée) de l'instance i. */
+function writeInstance(i) {
+  const a = B.archetype[i];
+  composeInstance(i);
+  meshes.lod[a].setMatrixAt(i - ranges.archStart[a], _matrix);
+  meshes.lod[a].instanceMatrix.needsUpdate = true;
+  const slot = detailSlotOf[i];
+  if (slot >= 0) {
+    meshes.detail[a].setMatrixAt(slot, _matrix);
+    meshes.detail[a].instanceMatrix.needsUpdate = true;
+  }
+}
 
 /**
- * Reconstruit tout le tissu pour une autre année. Aujourd'hui appelé une
- * seule fois, à l'init, pour 2026 : la tâche 8 le branchera sur les
- * changements d'année (et pourra n'en refaire qu'une partie, les métadonnées
- * par instance — uYear, seed, born — étant déjà là pour ça).
+ * Visite toutes les instances dont la présence a pu changer entre `a` et `b`
+ * (une fenêtre de construction [born, born+BUILD_YEARS) ou de démolition
+ * [died, died+RAZE_YEARS) recoupant [a, b]) et recalcule leur `visGrow` *pour
+ * l'année `year`* — toujours l'année cible réelle, jamais `a` ni `b` : en
+ * scrub arrière (year < lastAppliedYear), `b` vaut l'*ancienne* année, pas la
+ * nouvelle, et évaluer la présence à `b` dans ce cas serait un vrai bug
+ * (démolition inverse calculée à la mauvaise date).
+ *
+ * Correction (pourquoi ne visiter que [a, b] suffit) : une instance dont ni
+ * la fenêtre de construction ni celle de démolition ne recoupe [a, b] a une
+ * présence *nécessairement* constante sur tout [a, b] (la présence, fonction
+ * de l'année pour une instance donnée, ne varie qu'à l'intérieur de ces deux
+ * fenêtres) — sa `visGrow` déjà en place reste donc exacte pour n'importe
+ * quelle année de [a, b], y compris `year`, sans la revisiter.
+ * @param {number} a
+ * @param {number} b
+ * @param {number} year - année à laquelle évaluer la présence des instances touchées
+ */
+function sweep(a, b, year) {
+  const bornFrom = lowerBound(bornOrder, B.born, a - BUILD_YEARS - 1e-6);
+  const bornTo = lowerBound(bornOrder, B.born, b + 1e-6);
+  for (let k = bornFrom; k < bornTo; k++) touch(bornOrder[k], year);
+
+  const diedFrom = lowerBound(diedOrder, B.died, a - RAZE_YEARS - 1e-6);
+  const diedTo = lowerBound(diedOrder, B.died, b + 1e-6);
+  for (let k = diedFrom; k < diedTo; k++) touch(diedOrder[k], year);
+}
+
+function touch(i, year) {
+  const presence = lifecycle(year, {
+    born: B.born[i],
+    buildYears: BUILD_YEARS,
+    died: B.died[i],
+    razeYears: RAZE_YEARS,
+  }).presence;
+  B.visGrow[i] = presence > 0 ? easeOutBack(presence, GROWTH_OVERSHOOT) : 0;
+  writeInstance(i);
+}
+
+/**
+ * Applique `year` : balaie [lastAppliedYear, year] (voir `sweep`), évalué à
+ * `year`, puis avance `lastAppliedYear`. Bon marché pour un petit delta
+ * (scrub) ; un grand saut (setYear) balaie proportionnellement plus
+ * d'instances mais reste correct — même mécanisme, pas de cas spécial.
+ * @param {number} year
+ */
+function applyYear(year) {
+  if (year === lastAppliedYear) return;
+  const a = Math.min(lastAppliedYear, year);
+  const b = Math.max(lastAppliedYear, year);
+  sweep(a, b, year);
+  lastAppliedYear = year;
+}
+
+/**
+ * Force une resynchronisation complète pour `year` : balaie *tout* B (bornes
+ * -Infinity/+Infinity, donc [0, count) sur `bornOrder` comme sur
+ * `diedOrder`), sans dépendre de l'ancien `lastAppliedYear` — c'est le point
+ * qui distingue ceci d'un simple `applyYear` : réutiliser `lastAppliedYear`
+ * comme borne (une version antérieure de ce fichier le faisait, à tort)
+ * ne balaie que [ancienne année, nouvelle année], qui peut être un
+ * intervalle *étroit* ne recoupant la fenêtre de presque aucune instance —
+ * exactement l'inverse d'une resynchronisation complète. Filet de sécurité
+ * peu coûteux (appelé seulement depuis `window.__paris.setYear`, jamais par
+ * frame) contre un `update` sauté ou un futur bug du dirty-tracking : un
+ * scrub violent (2026↔−250 ×5) reste garanti sans instance orpheline même si
+ * l'incrémental avait un trou quelque part.
  * @param {number} year
  */
 export function rebuildForYear(year) {
-  lastYear = year;
-  fillLod();
-  districts.active.fill(0);
-  repackDetail();
+  sweep(-Infinity, Infinity, year);
+  lastAppliedYear = year;
+}
+
+/**
+ * Compte, sans muter l'état affiché, les instances présentes (`presence`>0)
+ * à `year` — diagnostic de non-régression (tâche 8) : après un scrub violent,
+ * `debugCounts(year).presentAtYear` doit rester cohérent (jamais d'instance
+ * orpheline visible à une année où elle ne devrait pas l'être). Exposé via
+ * `window.__paris.debugCounts`.
+ * @param {number} year
+ * @returns {{year:number, totalInstances:number, presentAtYear:number, detailInstances:number, activeDistricts:number, overflow:number}}
+ */
+export function debugCounts(year) {
+  let presentAtYear = 0;
+  for (let i = 0; i < B.count; i++) {
+    const presence = lifecycle(year, {
+      born: B.born[i],
+      buildYears: BUILD_YEARS,
+      died: B.died[i],
+      razeYears: RAZE_YEARS,
+    }).presence;
+    if (presence > 0) presentAtYear++;
+  }
+  return {
+    year,
+    totalInstances: B.count,
+    presentAtYear,
+    detailInstances: meshes.detail.reduce((s, m) => s + m.count, 0),
+    activeDistricts: districts.active ? districts.active.reduce((s, v) => s + v, 0) : 0,
+    overflow,
+  };
 }
 
 // ============================================================================
@@ -970,14 +1290,22 @@ export function init(ctx) {
   // Dépend de terrain.init() (déjà exécuté : ordre du registre de layers dans
   // main.js) pour échantillonner l'altitude du sol *rendu* via groundHeightAt.
   _camera = ctx.camera;
-  const year = 2026;
-  generate(year);
+  generate();
   buildMeshes(ctx);
-  rebuildForYear(year);
+  // État spatial de départ : tout en LOD, rien en détail — repackDetail()
+  // établit un `detailSlotOf` cohérent (tout à -1) avant le premier
+  // `rebuildForYear`, qui peut donc écrire sans risque dans le LOD seul ; le
+  // premier `update` (lodTimer pré-armé ci-dessous) réévaluera la caméra dès
+  // la première frame et repeuplera le détail avec la croissance déjà juste.
+  districts.active.fill(0);
+  repackDetail();
+  rebuildForYear(YEAR_MAX);
   lodTimer = LOD_INTERVAL; // première évaluation dès la première frame
 }
 
-export function update(dt) {
+export function update(dt, state) {
+  applyYear(state.year); // bon marché (dirty-tracking) — voir plus haut
+
   lodTimer += dt;
   if (lodTimer < LOD_INTERVAL) return;
   lodTimer = 0;
@@ -993,6 +1321,6 @@ export function stats() {
     detailCapacity: meshes.detail.reduce((s, m) => s + m.instanceMatrix.count, 0),
     activeDistricts: districts.active ? districts.active.reduce((s, v) => s + v, 0) : 0,
     overflow,
-    year: lastYear,
+    year: lastAppliedYear,
   };
 }

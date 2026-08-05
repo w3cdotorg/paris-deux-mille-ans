@@ -130,6 +130,7 @@ window.addEventListener("keydown", (event) => {
 function setYear(year) {
   state.year = Math.max(YEAR_MIN, Math.min(YEAR_MAX, year));
   terrain.forceRescan(state.year);
+  buildings.rebuildForYear(state.year);
   ui.update(0, state);
   renderer.render(scene, camera);
 }
@@ -144,6 +145,7 @@ window.__paris = {
   flyTo: (name, duration) => controls.flyTo(name, duration),
   camera,
   buildingStats: () => buildings.stats(),
+  debugCounts: (year) => buildings.debugCounts(year ?? state.year),
   renderer,
   scene,
 };

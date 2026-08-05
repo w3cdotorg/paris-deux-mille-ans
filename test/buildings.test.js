@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   familyForUrbanYear,
   fabricAt,
+  fabricHistoryAt,
+  originJitter,
   cellBuildingCount,
   isBuildableCell,
   placeCell,
@@ -13,7 +15,14 @@ import {
   CELL,
 } from "../src/layers/buildings.js";
 import { ARCHETYPES, ARCHETYPES_BY_FAMILY, FAMILY_ORDER } from "../src/archetypes.js";
-import { urbanYear } from "../src/geography.js";
+import { urbanYear, LANDMARKS, RINGS } from "../src/geography.js";
+import { lifecycle } from "../src/timeEngine.js";
+
+function insideEllipse(x, z, cx, cz, rx, rz) {
+  const dx = (x - cx) / rx;
+  const dz = (z - cz) / rz;
+  return dx * dx + dz * dz <= 1;
+}
 
 // ============================================================================
 // familyForUrbanYear — the brief's origin bands (gaulois<0, romain<500,
@@ -362,4 +371,230 @@ test("placeCell: no building's packing-axis footprint extends past the cell's ph
       `(${cellHalf}u + ${tolerance} tolerance); max packing extent seen = ${maxExtent.toFixed(3)}u ` +
       `(nominal envelope edgeHalf = ${edgeHalf.toFixed(3)}u)`
   );
+});
+
+// ============================================================================
+// Task 8 — growth over time: origin jitter, family-at-year for key cells,
+// crossgrow presence curves.
+// ============================================================================
+
+// --- originJitter: deterministic, bounded [0, 40) --------------------------
+
+test("originJitter: deterministic — same seed, same result, repeatedly", () => {
+  const a = originJitter(123456);
+  const b = originJitter(123456);
+  const c = originJitter(123456);
+  assert.equal(a, b);
+  assert.equal(b, c);
+});
+
+test("originJitter: bounded in [0, 40) across a wide sample of seeds", () => {
+  for (let seed = 0; seed < 5000; seed++) {
+    const j = originJitter(seed * 2654435761);
+    assert.ok(j >= 0, `jitter ${j} below 0 for seed ${seed}`);
+    assert.ok(j < 40, `jitter ${j} at or above 40 for seed ${seed}`);
+  }
+});
+
+test("originJitter: varies across seeds (not a constant)", () => {
+  const values = new Set();
+  for (let seed = 0; seed < 50; seed++) values.add(originJitter(seed * 2654435761));
+  assert.ok(values.size > 10, "expected real spread across seeds, not a near-constant value");
+});
+
+// --- fabricHistoryAt: origin born tracks uYear + jitter ---------------------
+
+test("fabricHistoryAt: the origin stage's born is uYear + originJitter(seed), never earlier than uYear", () => {
+  for (let seed = 0; seed < 100; seed++) {
+    const s = seed * 2654435761;
+    const history = fabricHistoryAt(1300, 0.6, true, s);
+    assert.equal(history[0].born, 1300 + originJitter(s));
+    assert.ok(history[0].born >= 1300);
+    assert.ok(history[0].born < 1300 + 40);
+  }
+});
+
+test("fabricHistoryAt: stages are in strictly chronological (non-decreasing born) order", () => {
+  for (let seed = 0; seed < 500; seed++) {
+    const s = seed * 2654435761;
+    const history = fabricHistoryAt(1300, 1, true, s);
+    for (let i = 1; i < history.length; i++) {
+      assert.ok(
+        history[i].born > history[i - 1].born,
+        `stage ${i} born ${history[i].born} not after stage ${i - 1} born ${history[i - 1].born}`
+      );
+    }
+  }
+});
+
+test("fabricHistoryAt: its last stage matches fabricAt(uYear, endYear, ...) exactly (fabricAt is now a thin wrapper)", () => {
+  for (let seed = 0; seed < 200; seed++) {
+    const s = seed * 2654435761;
+    for (const endYear of [200, 1400, 1900, 2026]) {
+      const history = fabricHistoryAt(1300, 0.7, true, s, endYear);
+      const last = history[history.length - 1];
+      const direct = fabricAt(1300, endYear, 0.7, true, s);
+      assert.equal(last.family, direct.family);
+      assert.equal(last.born, direct.born);
+    }
+  }
+});
+
+test("fabricHistoryAt: a longer endYear never produces a shorter history (transitions only accumulate)", () => {
+  for (let seed = 0; seed < 200; seed++) {
+    const s = seed * 2654435761;
+    const short = fabricHistoryAt(1300, 0.8, true, s, 1500);
+    const long = fabricHistoryAt(1300, 0.8, true, s, 2026);
+    assert.ok(long.length >= short.length);
+    // The short history is a strict prefix of the long one.
+    for (let i = 0; i < short.length; i++) {
+      assert.equal(short[i].family, long[i].family);
+      assert.equal(short[i].born, long[i].born);
+    }
+  }
+});
+
+// --- family-at-year for the brief's key cells -------------------------------
+
+const PERI = RINGS.peripherique;
+
+test("family-at-year: île de la Cité (uYear=-250) is predominantly romain by year 200", () => {
+  const uYear = urbanYear(LANDMARKS.notreDame.x, LANDMARKS.notreDame.z); // Cité, -250
+  let romain = 0;
+  const trials = 1000;
+  for (let seed = 0; seed < trials; seed++) {
+    const { family } = fabricAt(uYear, 200, 1, true, seed * 2654435761);
+    if (family === "romain") romain++;
+  }
+  assert.ok(romain / trials > 0.6, `expected >60% romain by 200, got ${romain}/${trials}`);
+});
+
+test("family-at-year: île de la Cité is predominantly medieval by year 1400", () => {
+  const uYear = urbanYear(LANDMARKS.notreDame.x, LANDMARKS.notreDame.z);
+  let medieval = 0;
+  const trials = 1000;
+  for (let seed = 0; seed < trials; seed++) {
+    const { family } = fabricAt(uYear, 1400, 1, true, seed * 2654435761);
+    if (family === "medieval") medieval++;
+  }
+  assert.ok(medieval / trials > 0.6, `expected >60% medieval by 1400, got ${medieval}/${trials}`);
+});
+
+test("family-at-year: île de la Cité is predominantly haussmann (re-clad) by year 1900", () => {
+  const uYear = urbanYear(LANDMARKS.notreDame.x, LANDMARKS.notreDame.z);
+  let haussmann = 0;
+  const trials = 1000;
+  for (let seed = 0; seed < trials; seed++) {
+    const { family } = fabricAt(uYear, 1900, 1, true, seed * 2654435761);
+    if (family === "haussmann") haussmann++;
+  }
+  assert.ok(haussmann / trials > 0.6, `expected >60% haussmann by 1900, got ${haussmann}/${trials}`);
+});
+
+test("family-at-year: a chez nous cell is not yet buildable in 1700 (absent/rural)", () => {
+  // Offset from the landmark itself (whose 3-unit clearance would exclude it
+  // regardless of year) but still inside the village core radius (10u).
+  const x = LANDMARKS.chezNous.x + 5;
+  const z = LANDMARKS.chezNous.z + 5;
+  const uYear = urbanYear(x, z);
+  assert.ok(uYear > 1700, `expected chez nous to urbanize after 1700, got uYear=${uYear}`);
+  assert.equal(isBuildableCell(x, z, uYear, 1700), false);
+});
+
+test("family-at-year: the same chez nous cell is classique or haussmann by 1900 (per its ~1780+ urbanYear)", () => {
+  const x = LANDMARKS.chezNous.x + 5;
+  const z = LANDMARKS.chezNous.z + 5;
+  const uYear = urbanYear(x, z);
+  const insideRing = insideEllipse(x, z, PERI.cx, PERI.cz, PERI.rx, PERI.rz);
+  assert.ok(insideRing, "chez nous should be inside the périphérique (annexed 1860)");
+  for (let seed = 0; seed < 300; seed++) {
+    const { family } = fabricAt(uYear, 1900, 0.4, insideRing, seed * 2654435761);
+    assert.ok(
+      family === "classique" || family === "haussmann",
+      `expected classique or haussmann, got ${family}`
+    );
+  }
+});
+
+test("family-at-year: La Défense (uYear~1975-2000) is always moderne by 1990 — origin family, nothing later to reclad into", () => {
+  const x = LANDMARKS.laDefense.x;
+  const z = LANDMARKS.laDefense.z;
+  const uYear = urbanYear(x, z);
+  const insideRing = insideEllipse(x, z, PERI.cx, PERI.cz, PERI.rx, PERI.rz);
+  assert.equal(insideRing, false, "La Défense should be outside the périphérique");
+  for (let seed = 0; seed < 300; seed++) {
+    const { family } = fabricAt(uYear, 1990, 0.1, insideRing, seed * 2654435761);
+    assert.equal(family, "moderne");
+  }
+});
+
+// --- crossgrow: old shrinks while new grows, presence sums sensibly --------
+
+test("crossgrow: during a haussmann re-clad, old presence + new presence stays in [0, ~1.2], never a gap", () => {
+  const BUILD_YEARS = 8;
+  const RAZE_YEARS = 8;
+  let sawGenuineOverlap = false;
+  let checkedTransitions = 0;
+
+  for (let seed = 0; seed < 60 && checkedTransitions < 15; seed++) {
+    const s = seed * 2654435761;
+    const history = fabricHistoryAt(1300, 1, true, s); // medieval-origin, core density, inside ring
+    if (history.length < 2) continue; // no reclad this seed — nothing to cross
+    checkedTransitions++;
+
+    for (let stage = 0; stage < history.length - 1; stage++) {
+      const oldStage = history[stage];
+      const newStage = history[stage + 1];
+      const diedOld = newStage.born; // exact match — see fabricHistoryAt's doc comment
+      const diedNew = stage + 2 < history.length ? history[stage + 2].born : Infinity;
+
+      for (let y = diedOld - 4; y <= diedOld + 12; y += 1) {
+        const oldPresence = lifecycle(y, {
+          born: oldStage.born,
+          buildYears: BUILD_YEARS,
+          died: diedOld,
+          razeYears: RAZE_YEARS,
+        }).presence;
+        const newPresence = lifecycle(y, {
+          born: newStage.born,
+          buildYears: BUILD_YEARS,
+          died: diedNew,
+          razeYears: RAZE_YEARS,
+        }).presence;
+
+        assert.ok(oldPresence >= 0 && oldPresence <= 1, `old presence ${oldPresence} out of [0,1]`);
+        assert.ok(newPresence >= 0 && newPresence <= 1, `new presence ${newPresence} out of [0,1]`);
+        assert.ok(
+          oldPresence + newPresence <= 1.2 + 1e-9,
+          `sum ${oldPresence + newPresence} exceeds 1.2 at year ${y} (crossFADE/overlap bug, not a crossgrow)`
+        );
+        if (oldPresence > 0.05 && newPresence > 0.05) sawGenuineOverlap = true;
+      }
+    }
+  }
+
+  assert.ok(checkedTransitions >= 5, `expected several reclad transitions to sample, got ${checkedTransitions}`);
+  assert.ok(sawGenuineOverlap, "expected at least one year where both old and new are genuinely present (a real crossgrow, not an instant cut)");
+});
+
+test("crossgrow: old presence and new presence sum to exactly 1 throughout the shared build/raze window (same duration, exact handoff)", () => {
+  // died(old) === born(new) by construction, and buildYears === razeYears,
+  // so the two ramps are exact mirror images: this is stricter than the
+  // ≤1.2 test above and locks in *why* it holds for this specific pairing.
+  const seed = 0; // known (see scratch investigation) to reclad medieval -> haussmann
+  const history = fabricHistoryAt(1300, 1, true, seed);
+  assert.ok(history.length >= 2, "expected this seed to reclad at least once");
+  const oldStage = history[0];
+  const newStage = history[1];
+  const diedOld = newStage.born;
+
+  for (let t = 0; t <= 8; t += 0.5) {
+    const y = diedOld + t - 4; // sweep from 4 years before to 4 years after the handoff
+    const oldPresence = lifecycle(y, { born: oldStage.born, buildYears: 8, died: diedOld, razeYears: 8 }).presence;
+    const newPresence = lifecycle(y, { born: newStage.born, buildYears: 8, died: Infinity, razeYears: 8 }).presence;
+    assert.ok(
+      Math.abs(oldPresence + newPresence - 1) < 1e-9,
+      `expected sum exactly 1 at year ${y}, got ${oldPresence + newPresence}`
+    );
+  }
 });

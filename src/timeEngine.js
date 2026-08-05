@@ -28,6 +28,31 @@ export function smoothstep(t) {
 }
 
 /**
+ * "Back ease out": maps presence [0,1] to a visual growth factor that
+ * slightly overshoots past 1 before settling — the "pop from foundations"
+ * requested for building growth (task 8). f(0)=0, f(1)=1 exactly (so it
+ * composes cleanly with `lifecycle`'s presence, including at the absent/
+ * alive boundaries), with a small (~5%) overshoot bump around t≈0.64.
+ * Values outside [0,1] are clamped first, so callers never need to guard.
+ * @param {number} t - presence, ideally in [0, 1]
+ * @param {number} [overshoot=1.2] - overshoot strength (0 = plain lerp, no bump)
+ * @returns {number} growth factor, in [0, ~1.05] for the default overshoot
+ */
+export function easeOutBack(t, overshoot = 1.2) {
+  const clamped = Math.max(0, Math.min(1, t));
+  // Exact boundaries (not just "close to 0/1"): callers compose this with
+  // lifecycle's presence, whose own 0/1 boundaries are exact, and a stray
+  // ~1e-16 would otherwise make an "absent" instance narrowly fail a `<= 0`
+  // hide check.
+  if (clamped <= 0) return 0;
+  if (clamped >= 1) return 1;
+  const c = overshoot;
+  const c1 = c + 1;
+  const u = clamped - 1;
+  return 1 + c1 * u * u * u + c * u * u;
+}
+
+/**
  * Determine the lifecycle phase and presence of an object.
  * An object can be absent, building (presence 0→1), alive, razing (presence 1→0), or gone.
  * @param {number} year - The year to evaluate

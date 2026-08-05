@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lifecycle, momentBlend, sliderToYear, yearToSlider, lerp, smoothstep } from "../src/timeEngine.js";
+import {
+  lifecycle,
+  momentBlend,
+  sliderToYear,
+  yearToSlider,
+  lerp,
+  smoothstep,
+  easeOutBack,
+} from "../src/timeEngine.js";
 import { MOMENTS } from "../src/timeline.js";
 
 // Extract anchors from MOMENTS
@@ -33,6 +41,37 @@ test("timeEngine: smoothstep(1) === 1", () => {
 
 test("timeEngine: smoothstep(0.5) === 0.5", () => {
   assert.strictEqual(smoothstep(0.5), 0.5);
+});
+
+// ============================================================================
+// easeOutBack (task 8: growth "pop" from foundations)
+// ============================================================================
+
+test("easeOutBack: f(0) === 0 exactly (composes with lifecycle's presence=0 boundary)", () => {
+  assert.strictEqual(easeOutBack(0), 0);
+});
+
+test("easeOutBack: f(1) === 1 exactly (composes with lifecycle's presence=1 boundary)", () => {
+  assert.strictEqual(easeOutBack(1), 1);
+});
+
+test("easeOutBack: overshoots slightly above 1 somewhere in (0,1) — the 'pop'", () => {
+  let max = 0;
+  for (let t = 0; t <= 1; t += 0.01) max = Math.max(max, easeOutBack(t));
+  assert.ok(max > 1, `expected an overshoot bump above 1, got max=${max}`);
+  // "léger" overshoot: bounded, not a wild swing.
+  assert.ok(max < 1.15, `overshoot too large: ${max}`);
+});
+
+test("easeOutBack: clamps inputs outside [0,1]", () => {
+  assert.strictEqual(easeOutBack(-5), 0);
+  assert.strictEqual(easeOutBack(5), 1);
+});
+
+test("easeOutBack: overshoot=0 degenerates to a plain cubic that never exceeds 1", () => {
+  let max = 0;
+  for (let t = 0; t <= 1; t += 0.01) max = Math.max(max, easeOutBack(t, 0));
+  assert.ok(max <= 1.0001, `expected no overshoot with overshoot=0, got max=${max}`);
 });
 
 // ============================================================================
