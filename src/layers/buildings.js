@@ -710,6 +710,8 @@ const B = {
   died: null, // Float32Array — année de remplacement (Infinity = dernière étape, tient jusqu'en 2026)
   seed: null, // Uint32Array — rejoue tous les tirages
   visGrow: null, // Float32Array — facteur de croissance courant (easeOutBack(presence)), 0 = invisible
+  district: null, // Uint16Array — indice du quartier (voir `districts`), pour que `writeInstance`
+  // sache si cette instance est actuellement rendue en détail (voir plus bas).
 };
 
 const districts = {
@@ -919,6 +921,7 @@ function generate() {
   B.died = new Float32Array(n);
   B.seed = new Uint32Array(n);
   B.visGrow = new Float32Array(n);
+  B.district = new Uint16Array(n);
 
   const cursor = Int32Array.from(start);
   for (const p of raw) {
@@ -936,6 +939,7 @@ function generate() {
     B.born[i] = p.born;
     B.died[i] = p.died;
     B.seed[i] = p.seed;
+    B.district[i] = p.district;
   }
 
   const archStart = new Int32Array(nArch);
@@ -1247,11 +1251,33 @@ function lowerBound(order, values, target) {
   return lo;
 }
 
-/** Recompose et réécrit la matrice LOD (toujours) et détail (si compactée) de l'instance i. */
+/**
+ * Recompose et réécrit la matrice LOD (toujours) et détail (si compactée) de
+ * l'instance i.
+ *
+ * Correctif de revue (Important 2, suite) : la matrice LOD n'est écrite à sa
+ * valeur composée *que si* le quartier de l'instance n'est pas actuellement
+ * actif (rendu en détail) — sinon on y écrit `_zero`, exactement comme le
+ * ferait `refreshLodDistrict` pour ce même quartier. Avant ce correctif,
+ * `writeInstance` ignorait `districts.active` et réécrivait toujours la
+ * valeur composée réelle dans le LOD, y compris pour une instance dont le
+ * quartier est actif — ce qui « dé-masquait » son entrée LOD (remise à une
+ * échelle non nulle) alors que la même instance est *aussi* dessinée par le
+ * mesh de détail : un double-rendu. `refreshLodDistrict` ne remet à zéro
+ * qu'à la *transition* d'un quartier vers l'état actif ; tout `sweep`/`touch`
+ * ultérieur (un `applyYear` par frame, ou pire, `rebuildForYear`, qui touche
+ * *tout* `B`) réécrivait ensuite la vraie valeur par-dessus, sans jamais
+ * revérifier l'état actif — un `setYear` à la caméra proche (quartiers déjà
+ * actifs) suffisait à réintroduire le double-rendu à chaque appel. Un seul
+ * drapeau (`districts.active`) doit continuer à décider laquelle des deux
+ * représentations est visible ; c'est maintenant vrai à *chaque* écriture,
+ * pas seulement au moment de la transition.
+ */
 function writeInstance(i) {
   const a = B.archetype[i];
   composeInstance(i);
-  meshes.lod[a].setMatrixAt(i - ranges.archStart[a], _matrix);
+  const activeDistrict = districts.active && districts.active[B.district[i]] === 1;
+  meshes.lod[a].setMatrixAt(i - ranges.archStart[a], activeDistrict ? _zero : _matrix);
   meshes.lod[a].instanceMatrix.needsUpdate = true;
   const slot = detailSlotOf[i];
   if (slot >= 0) {
@@ -1352,26 +1378,49 @@ export function rebuildForYear(year) {
  * pouvait laisser une scène complètement fausse tout en passant ce diagnostic
  * haut la main, puisqu'il ne regardait jamais l'état appliqué — c'est
  * exactement ce que la revue a signalé (le stress ×5 « sans orphelin » ne
- * prouvait rien sur `applyYear`/`sweep`). Deux vérités appliquées sont
- * comparées à la vérité terrain recalculée :
- *  - `B.visGrow[i]` (écrit par `touch`) ;
- *  - la matrice réellement présente dans le mesh LOD (écrite par
- *    `writeInstance`, toujours à jour — `sweep` visite `writeInstance` pour
- *    *toute* instance dont la fenêtre recoupe le balayage), dont on relit le
- *    facteur d'échelle Y.
- * Un écart sur l'un ou l'autre est une vraie divergence entre le modèle et ce
- * qui est affiché : `mismatches` doit valoir 0 après tout scrub, si violent
- * soit-il. Exposé via `window.__paris.debugCounts`.
+ * prouvait rien sur `applyYear`/`sweep`).
+ *
+ * Correctif de revue (Important 2, *suite*) : la première version de ce
+ * correctif comparait la matrice LOD à la valeur composée par présence seule,
+ * sans tenir compte de `districts.active` — donc *aveugle* au double-rendu
+ * (LOD non masqué alors que le quartier est actif et déjà dessiné en détail),
+ * précisément le bug que la relecture a mis en évidence empiriquement (33
+ * faux `lodMatrixMismatches` à -250, 16714 à 2026, en caméra proche). La
+ * vérité terrain de chaque représentation tient maintenant compte de l'état
+ * actif du quartier de l'instance :
+ *  - `B.visGrow[i]` (écrit par `touch`) — indépendant du LOD/détail, doit
+ *    toujours correspondre à la présence pure.
+ *  - la matrice LOD réellement présente dans le mesh (écrite par
+ *    `writeInstance`) doit valoir *zéro* si le quartier est actif (rendu en
+ *    détail — sinon double-rendu), sinon la valeur composée par présence.
+ *  - la matrice détail, *si l'instance y occupe actuellement un slot dessiné*
+ *    (`detailSlotOf[i]` valide et < `mesh.count`), doit valoir la composée
+ *    par présence si le quartier est actif (sinon c'est un slot fantôme :
+ *    dessiné pour un quartier qui ne devrait plus être en détail — une fuite
+ *    de comptabilité). Ne compte *pas* comme une erreur le cas où une
+ *    instance présente d'un quartier actif n'a pas encore de slot détail :
+ *    `repackDetail` est throttlé au changement d'année arrondie (voir
+ *    Important 3) — un retard d'au plus une année simulée avant qu'une
+ *    construction tout juste achevée n'apparaisse en détail est un
+ *    compromis documenté, pas un bug (elle ne double-rend jamais pour
+ *    autant : son LOD reste correctement masqué par la règle ci-dessus).
+ *
+ * Un écart sur l'une de ces vérités *appliquées* est une vraie divergence
+ * entre le modèle et ce qui est affiché : `mismatches` doit valoir 0 après
+ * tout scrub, dans n'importe quel état de caméra, si violent soit-il.
+ * Exposé via `window.__paris.debugCounts`.
  * @param {number} year
  * @returns {{year:number, totalInstances:number, presentAtYear:number,
  *   detailInstances:number, activeDistricts:number, overflow:number,
- *   visGrowMismatches:number, lodMatrixMismatches:number, mismatches:number}}
+ *   visGrowMismatches:number, lodMatrixMismatches:number,
+ *   detailMatrixMismatches:number, mismatches:number}}
  */
 export function debugCounts(year) {
   const TOL = 1e-4;
   let presentAtYear = 0;
   let visGrowMismatches = 0;
   let lodMatrixMismatches = 0;
+  let detailMatrixMismatches = 0;
   for (let i = 0; i < B.count; i++) {
     const presence = lifecycle(year, {
       born: B.born[i],
@@ -1385,10 +1434,35 @@ export function debugCounts(year) {
     if (Math.abs(B.visGrow[i] - expectedGrow) > TOL) visGrowMismatches++;
 
     const a = B.archetype[i];
+    const active = districts.active ? districts.active[B.district[i]] === 1 : false;
+
+    // LOD : doit être masqué (zéro) si le quartier est actif — c'est
+    // exactement la règle que `writeInstance`/`refreshLodDistrict` doivent
+    // maintenir en permanence, pas seulement à la transition.
+    const expectedLodGrow = active ? 0 : expectedGrow;
     meshes.lod[a].getMatrixAt(i - ranges.archStart[a], _readMatrix);
     _readMatrix.decompose(_readPos, _readQuat, _readScale);
-    const liveGrow = B.scaleY[i] > 0 ? _readScale.y / B.scaleY[i] : 0;
-    if (Math.abs(liveGrow - expectedGrow) > TOL) lodMatrixMismatches++;
+    const liveLodGrow = B.scaleY[i] > 0 ? _readScale.y / B.scaleY[i] : 0;
+    if (Math.abs(liveLodGrow - expectedLodGrow) > TOL) lodMatrixMismatches++;
+
+    // Détail : si l'instance occupe actuellement un slot réellement dessiné
+    // (< mesh.count), c'est une erreur si son quartier n'est plus actif (fuite
+    // de comptabilité) ou si la valeur qui y est écrite est fausse. L'absence
+    // de slot pour un quartier actif et présent n'est PAS comptée : c'est le
+    // retard throttlé documenté de `repackDetail` (Important 3), jamais un
+    // double-rendu puisque le LOD reste masqué dans ce cas.
+    const slot = detailSlotOf ? detailSlotOf[i] : -1;
+    const drawnInDetail = slot >= 0 && slot < meshes.detail[a].count;
+    if (drawnInDetail) {
+      if (!active) {
+        detailMatrixMismatches++;
+      } else {
+        meshes.detail[a].getMatrixAt(slot, _readMatrix);
+        _readMatrix.decompose(_readPos, _readQuat, _readScale);
+        const liveDetailGrow = B.scaleY[i] > 0 ? _readScale.y / B.scaleY[i] : 0;
+        if (Math.abs(liveDetailGrow - expectedGrow) > TOL) detailMatrixMismatches++;
+      }
+    }
   }
   return {
     year,
@@ -1399,7 +1473,8 @@ export function debugCounts(year) {
     overflow,
     visGrowMismatches,
     lodMatrixMismatches,
-    mismatches: visGrowMismatches + lodMatrixMismatches,
+    detailMatrixMismatches,
+    mismatches: visGrowMismatches + lodMatrixMismatches + detailMatrixMismatches,
   };
 }
 
