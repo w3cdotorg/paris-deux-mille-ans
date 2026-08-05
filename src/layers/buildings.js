@@ -44,7 +44,7 @@
 import * as THREE from "three";
 import { urbanYear, distanceToSeine, RINGS, LANDMARKS, ISLANDS } from "../geography.js";
 import { lerp, smoothstep, lifecycle, easeOutBack } from "../timeEngine.js";
-import { YEAR_MAX } from "../timeline.js";
+import { YEAR_MIN, YEAR_MAX } from "../timeline.js";
 import { groundHeightAt } from "./terrain.js";
 import {
   ARCHETYPES,
@@ -117,21 +117,21 @@ const COUNT_EDGE = [2, 2]; // ... et en périphérie
 // de détail (contre ~18,4k dans le budget d'origine avant ce fix), ce qui
 // dégradait le fps mesuré. 240 ramène ce nombre à ~18,5k.
 //
-// Resserré une deuxième fois, 240 → 150 (tâche 8) : `repackDetail` compacte,
-// par quartier actif, *tout* l'historique d'une parcelle (chaque étape de
-// `expandHistory`, y compris les étapes déjà démolies — masquées par une
-// matrice à échelle nulle, mais toujours dans `mesh.count`, donc toujours
-// transformées par le vertex shader), pas seulement le bâti *présent* à
-// l'année courante — un compromis délibéré (voir la note « présence et LOD »
-// plus bas) pour ne pas coupler le compactage spatial au dirty-tracking
-// temporel. Sur la ville figée (~38,7k bâtiments réellement visibles en
-// 2026) l'historique complet pèse ~84,3k lignes ; au rayon 240 déjà mesuré
-// à ~18,5k au preset `cite`, ce même point de vue englobait après la tâche
-// 8 ~42,7k instances détail (vertex shader ×2,3), avec un fps mesuré en
-// scrub tombé à la limite basse (~40) de la cible. 150 ramène ce nombre à
-// ~19,5k — quasi identique au budget d'origine — tout en restant largement
-// au-delà de la distance de caméra 80 du preset `cite`.
-const DETAIL_RADIUS = 150;
+// Resserré une deuxième fois à 150 (tâche 8, régression temporaire), puis
+// **restauré à 240** (correctif de revue Important 3) : le vrai problème
+// n'était pas le rayon, c'était `repackDetail` qui compactait, par quartier
+// actif, *tout* l'historique d'une parcelle (chaque étape de `expandHistory`,
+// y compris les étapes déjà démolies — masquées par une matrice à échelle
+// nulle, mais toujours dans `mesh.count`, donc toujours transformées par le
+// vertex shader), au lieu du bâti réellement *présent* (`B.visGrow[i] > 0`) à
+// l'année courante. `repackDetail` est désormais présence-consciente (voir
+// plus bas) et `detailCapacities` dimensionne les buffers sur le pic de
+// présence *simultanée* (au plus 2 étapes par parcelle, le temps d'un
+// crossgrow) plutôt que sur le total de l'historique — ~19-20k instances
+// détail au preset `cite` avec ce rayon 240, contre ~42,7k avant ce correctif
+// pour le même rayon (mesure tâche 8 initiale) et ~84,3k si tout l'historique
+// devait être compacté sans filtrage de présence.
+const DETAIL_RADIUS = 240;
 const LOD_INTERVAL = 0.12; // secondes entre deux réévaluations de la bascule
 
 // Tâche 8 — cycle de vie temporel. Un bâtiment met BUILD_YEARS à sortir de
@@ -141,8 +141,8 @@ const LOD_INTERVAL = 0.12; // secondes entre deux réévaluations de la bascule
 // `expandHistory`), la présence de l'ancien (1→0) et celle du nouveau (0→1)
 // se somment à *exactement* 1 tout au long de la fenêtre : un crossgrow, pas
 // un crossfade — l'ancien rétrécit pendant que le nouveau pousse à sa place.
-const BUILD_YEARS = 8;
-const RAZE_YEARS = 8;
+export const BUILD_YEARS = 8;
+export const RAZE_YEARS = 8;
 const GROWTH_OVERSHOOT = 1.2; // "léger overshoot" — voir easeOutBack (timeEngine.js)
 
 // ============================================================================
@@ -398,7 +398,20 @@ export function originJitter(seed) {
  */
 export function fabricHistoryAt(uYear, density, insideRing, seed, endYear = YEAR_MAX) {
   const index0 = EPOCH_INDEX[familyForUrbanYear(uYear)];
-  const born0 = uYear + originJitter(seed); // originJitter >= 0, so born0 >= uYear always
+  let born0 = uYear + originJitter(seed); // originJitter >= 0, so born0 >= uYear always
+  // Correctif de revue (Critical 1, tâche 8) : à uYear === YEAR_MIN (l'île de
+  // la Cité, seule origine du tout premier instant de la frise), le jitter
+  // strictement positif fait que `born0` ne peut jamais être <= YEAR_MIN —
+  // le bâti d'origine n'a donc jamais fini ses BUILD_YEARS à YEAR_MIN lui-même,
+  // rendant le village fondateur structurellement invisible à l'instant
+  // d'ouverture de toute la frise. On recule `born0` (un léger étalement
+  // avant YEAR_MIN ne pose aucun problème : rien ne s'affiche avant YEAR_MIN
+  // de toute façon) pour que le village soit pleinement debout dès YEAR_MIN.
+  // Ne déclenche qu'aux cellules d'origine de la frise ; le schéma de jitter
+  // général reste inchangé pour tout `uYear` postérieur.
+  if (uYear <= YEAR_MIN) {
+    born0 = Math.min(born0, YEAR_MIN - BUILD_YEARS);
+  }
   const history = [{ family: EPOCHS[index0].family, born: born0 }];
 
   for (let k = index0 + 1; k < EPOCHS.length; k++) {
@@ -728,6 +741,14 @@ let diedOrder = null;
 // être réécrite dans le détail (en plus du LOD, toujours à jour).
 let detailSlotOf = null;
 let lastAppliedYear = -Infinity; // force un balayage complet au premier appel
+// Dernière année (arrondie) pour laquelle `repackDetail` a tourné (tâche 8,
+// correctif Important 3) : un changement de quartiers actifs déclenche déjà
+// un repack (voir `updateLod`), mais la présence peut aussi changer *à
+// l'intérieur* d'un quartier déjà actif (une construction qui se termine, un
+// re-clad qui s'achève) sans toucher `districts.active` — `update` compare
+// `Math.round(state.year)` à cette valeur pour détecter ce cas, au même
+// rythme throttlé que la bascule de LOD.
+let lastRepackYear = null;
 
 const meshes = { detail: [], lod: [] };
 let material = null;
@@ -742,6 +763,15 @@ const _scale = new THREE.Vector3();
 const _color = new THREE.Color();
 const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
 const UP = new THREE.Vector3(0, 1, 0);
+
+// Scratch pour `debugCounts` (tâche 8, correctif Important 2) : lit la
+// matrice réellement écrite dans le mesh LOD (pas B lui-même) pour vérifier
+// l'état *appliqué*, jamais alloué par frame (debugCounts n'est jamais dans
+// le chemin per-frame).
+const _readMatrix = new THREE.Matrix4();
+const _readPos = new THREE.Vector3();
+const _readQuat = new THREE.Quaternion();
+const _readScale = new THREE.Vector3();
 
 // ============================================================================
 // Génération du tissu
@@ -922,6 +952,43 @@ function generate() {
   ranges.archStart = archStart;
   ranges.archCount = archCount;
 
+  // --- pic de présence *simultanée* par (archétype, quartier) ---------------
+  // Correctif de revue (Important 3, tâche 8) : `len[k]` (ci-dessus) compte
+  // *tout* l'historique d'un bucket, le majorant qu'utilisait l'ancien
+  // `detailCapacities` pour dimensionner le mesh de détail — correct pour un
+  // `repackDetail` qui compactait tout, mais très large pour le nouveau
+  // `repackDetail` présence-consciente (voir plus bas), qui ne pack plus que
+  // les étapes dont `B.visGrow[i] > 0` à l'année courante. Le majorant qu'il
+  // faut désormais, c'est le nombre maximal d'étapes *simultanément*
+  // présentes à une même année — jamais plus de 2 par parcelle (le temps d'un
+  // crossgrow, l'ancienne qui rétrécit + la nouvelle qui pousse), donc bien
+  // inférieur au total d'historique. Calculé par balayage d'événements
+  // (naissance = +1, fin de démolition = born+RAZE_YEARS = -1) par bucket :
+  // le pic exact de la somme courante, sans avoir à énumérer les années.
+  const presentCap = new Int32Array(nKeys);
+  {
+    const events = [];
+    for (let k = 0; k < nKeys; k++) {
+      const from = start[k];
+      const to = from + len[k];
+      if (from === to) continue;
+      events.length = 0;
+      for (let i = from; i < to; i++) {
+        events.push([B.born[i], 1]);
+        if (Number.isFinite(B.died[i])) events.push([B.died[i] + RAZE_YEARS, -1]);
+      }
+      events.sort((p, q) => p[0] - q[0] || p[1] - q[1]); // retraits avant ajouts à égalité
+      let cur = 0;
+      let max = 0;
+      for (const [, delta] of events) {
+        cur += delta;
+        if (cur > max) max = cur;
+      }
+      presentCap[k] = max;
+    }
+  }
+  ranges.presentCap = presentCap;
+
   districts.cx = new Float32Array(districts.count);
   districts.cz = new Float32Array(districts.count);
   districts.active = new Uint8Array(districts.count);
@@ -946,10 +1013,20 @@ function generate() {
 /**
  * Capacité à allouer par archétype pour les InstancedMesh de détail : le pire
  * cas réel, c'est-à-dire le maximum, sur toutes les positions de caméra
- * plausibles, du nombre d'instances de cet archétype dans les quartiers à
- * portée. On échantillonne les centres de quartier comme positions candidates
- * (borne supérieure : la caméra étant toujours en hauteur, sa distance 3D à un
- * quartier est plus grande que la distance planaire testée ici).
+ * plausibles *et* sur toutes les années plausibles, du nombre d'instances de
+ * cet archétype *présentes en même temps* dans les quartiers à portée. On
+ * échantillonne les centres de quartier comme positions candidates (borne
+ * supérieure : la caméra étant toujours en hauteur, sa distance 3D à un
+ * quartier est plus grande que la distance planaire testée ici), et
+ * `ranges.presentCap` (voir `generate`) donne, par bucket, le pic déjà
+ * maximisé sur l'année — la somme de majorants indépendants reste un
+ * majorant valide de la somme réelle, même si les pics de buckets différents
+ * ne tombent pas à la même année.
+ *
+ * Correctif de revue (Important 3, tâche 8) : utilisait `ranges.len`, le
+ * total de *tout* l'historique d'un bucket (pertinent quand `repackDetail`
+ * packait tout, ghosts compris) — désormais `ranges.presentCap`, le pic de
+ * présence simultanée, cohérent avec le `repackDetail` présence-conscient.
  * @returns {Int32Array}
  */
 function detailCapacities() {
@@ -966,7 +1043,7 @@ function detailCapacities() {
       const dx = districts.cx[d] - districts.cx[c];
       const dz = districts.cz[d] - districts.cz[c];
       if (dx * dx + dz * dz > reach2) continue;
-      for (let a = 0; a < nArch; a++) acc[a] += ranges.len[a * nD + d];
+      for (let a = 0; a < nArch; a++) acc[a] += ranges.presentCap[a * nD + d];
     }
     for (let a = 0; a < nArch; a++) if (acc[a] > capacity[a]) capacity[a] = acc[a];
   }
@@ -1072,6 +1149,17 @@ function refreshLodDistrict(d) {
  * aussi `detailSlotOf` (tâche 8) : c'est ce qui permet à `applyYear` de savoir
  * quelles instances, en plus de leur plage LOD (toujours à jour), doivent
  * aussi être réécrites dans le mesh de détail quand leur croissance change.
+ *
+ * Présence-consciente (correctif de revue Important 3, tâche 8) : une
+ * instance dont `B.visGrow[i] <= 0` (pas encore née, ou déjà démolie à
+ * l'année en cours d'application) est *ignorée* du compactage plutôt que
+ * packée quand même sous forme de matrice à échelle nulle — c'est ce qui
+ * évite de payer un travail de vertex shader pour les ghosts déjà démolis
+ * d'une parcelle (chaque étape d'`expandHistory` autre que la courante).
+ * Suppose que `B.visGrow` est déjà à jour pour l'année en cours au moment de
+ * l'appel (vrai dans les trois chemins d'appel : `updateLod` après
+ * `applyYear` dans `update`, la resynchronisation forcée de `rebuildForYear`,
+ * et le déclenchement au changement d'année arrondie dans `update`).
  */
 function repackDetail() {
   const nD = districts.count;
@@ -1087,6 +1175,7 @@ function repackDetail() {
       const from = ranges.start[k];
       const to = from + ranges.len[k];
       for (let i = from; i < to; i++) {
+        if (B.visGrow[i] <= 0) continue; // pas présent à l'année en cours : ne pas packer
         if (slot >= capacity) {
           overflow++;
           continue;
@@ -1244,19 +1333,45 @@ function applyYear(year) {
 export function rebuildForYear(year) {
   sweep(-Infinity, Infinity, year);
   lastAppliedYear = year;
+  // `repackDetail` est désormais présence-consciente (correctif Important 3,
+  // tâche 8) : un grand saut peut donc changer *quelles* instances doivent
+  // être compactées dans le détail, pas seulement leur croissance — une
+  // resynchronisation complète doit forcer un repack, pas seulement un
+  // balayage de présence.
+  repackDetail();
+  lastRepackYear = Math.round(year);
 }
 
 /**
  * Compte, sans muter l'état affiché, les instances présentes (`presence`>0)
- * à `year` — diagnostic de non-régression (tâche 8) : après un scrub violent,
- * `debugCounts(year).presentAtYear` doit rester cohérent (jamais d'instance
- * orpheline visible à une année où elle ne devrait pas l'être). Exposé via
- * `window.__paris.debugCounts`.
+ * à `year`, et — correctif de revue (Important 2, tâche 8) — vérifie que
+ * l'état réellement *appliqué* (celui que la scène affiche) correspond à
+ * cette vérité terrain. La première version de cette fonction ne faisait que
+ * ré-évaluer `lifecycle` elle-même et compter : un `applyYear`/`sweep` cassé
+ * (mauvais index touché, `writeInstance` sauté, `B.visGrow` jamais écrit...)
+ * pouvait laisser une scène complètement fausse tout en passant ce diagnostic
+ * haut la main, puisqu'il ne regardait jamais l'état appliqué — c'est
+ * exactement ce que la revue a signalé (le stress ×5 « sans orphelin » ne
+ * prouvait rien sur `applyYear`/`sweep`). Deux vérités appliquées sont
+ * comparées à la vérité terrain recalculée :
+ *  - `B.visGrow[i]` (écrit par `touch`) ;
+ *  - la matrice réellement présente dans le mesh LOD (écrite par
+ *    `writeInstance`, toujours à jour — `sweep` visite `writeInstance` pour
+ *    *toute* instance dont la fenêtre recoupe le balayage), dont on relit le
+ *    facteur d'échelle Y.
+ * Un écart sur l'un ou l'autre est une vraie divergence entre le modèle et ce
+ * qui est affiché : `mismatches` doit valoir 0 après tout scrub, si violent
+ * soit-il. Exposé via `window.__paris.debugCounts`.
  * @param {number} year
- * @returns {{year:number, totalInstances:number, presentAtYear:number, detailInstances:number, activeDistricts:number, overflow:number}}
+ * @returns {{year:number, totalInstances:number, presentAtYear:number,
+ *   detailInstances:number, activeDistricts:number, overflow:number,
+ *   visGrowMismatches:number, lodMatrixMismatches:number, mismatches:number}}
  */
 export function debugCounts(year) {
+  const TOL = 1e-4;
   let presentAtYear = 0;
+  let visGrowMismatches = 0;
+  let lodMatrixMismatches = 0;
   for (let i = 0; i < B.count; i++) {
     const presence = lifecycle(year, {
       born: B.born[i],
@@ -1265,6 +1380,15 @@ export function debugCounts(year) {
       razeYears: RAZE_YEARS,
     }).presence;
     if (presence > 0) presentAtYear++;
+    const expectedGrow = presence > 0 ? easeOutBack(presence, GROWTH_OVERSHOOT) : 0;
+
+    if (Math.abs(B.visGrow[i] - expectedGrow) > TOL) visGrowMismatches++;
+
+    const a = B.archetype[i];
+    meshes.lod[a].getMatrixAt(i - ranges.archStart[a], _readMatrix);
+    _readMatrix.decompose(_readPos, _readQuat, _readScale);
+    const liveGrow = B.scaleY[i] > 0 ? _readScale.y / B.scaleY[i] : 0;
+    if (Math.abs(liveGrow - expectedGrow) > TOL) lodMatrixMismatches++;
   }
   return {
     year,
@@ -1273,6 +1397,9 @@ export function debugCounts(year) {
     detailInstances: meshes.detail.reduce((s, m) => s + m.count, 0),
     activeDistricts: districts.active ? districts.active.reduce((s, v) => s + v, 0) : 0,
     overflow,
+    visGrowMismatches,
+    lodMatrixMismatches,
+    mismatches: visGrowMismatches + lodMatrixMismatches,
   };
 }
 
@@ -1292,13 +1419,15 @@ export function init(ctx) {
   _camera = ctx.camera;
   generate();
   buildMeshes(ctx);
-  // État spatial de départ : tout en LOD, rien en détail — repackDetail()
-  // établit un `detailSlotOf` cohérent (tout à -1) avant le premier
-  // `rebuildForYear`, qui peut donc écrire sans risque dans le LOD seul ; le
-  // premier `update` (lodTimer pré-armé ci-dessous) réévaluera la caméra dès
-  // la première frame et repeuplera le détail avec la croissance déjà juste.
+  // État spatial de départ : tout en LOD, rien en détail — `rebuildForYear`
+  // (appelé juste après) fait à la fois le balayage complet de présence et un
+  // premier `repackDetail` (désormais présence-conscient, voir plus haut) :
+  // `detailSlotOf` en sort déjà cohérent avec `B.visGrow` pour YEAR_MAX (ici
+  // un no-op puisqu'aucun quartier n'est encore actif) ; le premier `update`
+  // (lodTimer pré-armé ci-dessous) réévaluera la caméra dès la première frame
+  // et repeuplera le détail des quartiers proches avec la croissance déjà
+  // juste.
   districts.active.fill(0);
-  repackDetail();
   rebuildForYear(YEAR_MAX);
   lodTimer = LOD_INTERVAL; // première évaluation dès la première frame
 }
@@ -1309,7 +1438,20 @@ export function update(dt, state) {
   lodTimer += dt;
   if (lodTimer < LOD_INTERVAL) return;
   lodTimer = 0;
-  updateLod(_camera);
+  updateLod(_camera); // repack déjà si des quartiers ont changé d'état actif
+
+  // Correctif de revue (Important 3, tâche 8) : la présence peut aussi changer
+  // *à l'intérieur* d'un quartier déjà actif (une construction qui se termine,
+  // un re-clad qui s'achève) sans que `districts.active` bouge — ce
+  // déclencheur, au même rythme throttlé que la bascule de LOD ci-dessus,
+  // couvre ce cas. L'arrondi à l'année entière suffit : BUILD_YEARS et
+  // RAZE_YEARS valent tous deux 8, une transition ne peut donc pas se
+  // terminer puis redémarrer au sein de la même année entière.
+  const roundedYear = Math.round(state.year);
+  if (roundedYear !== lastRepackYear) {
+    lastRepackYear = roundedYear;
+    repackDetail();
+  }
 }
 
 export function stats() {

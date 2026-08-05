@@ -13,10 +13,13 @@ import {
   cellCenterZ,
   streetOrientation,
   CELL,
+  BUILD_YEARS,
+  RAZE_YEARS,
 } from "../src/layers/buildings.js";
 import { ARCHETYPES, ARCHETYPES_BY_FAMILY, FAMILY_ORDER } from "../src/archetypes.js";
-import { urbanYear, LANDMARKS, RINGS } from "../src/geography.js";
-import { lifecycle } from "../src/timeEngine.js";
+import { urbanYear, LANDMARKS, RINGS, ISLANDS } from "../src/geography.js";
+import { lifecycle, easeOutBack } from "../src/timeEngine.js";
+import { YEAR_MIN, YEAR_MAX } from "../src/timeline.js";
 
 function insideEllipse(x, z, cx, cz, rx, rz) {
   const dx = (x - cx) / rx;
@@ -597,4 +600,113 @@ test("crossgrow: old presence and new presence sum to exactly 1 throughout the s
       `expected sum exactly 1 at year ${y}, got ${oldPresence + newPresence}`
     );
   }
+});
+
+// ============================================================================
+// fabricHistoryAt: YEAR_MIN clamp (review fix, Critical 1) — the île de la
+// Cité's founding village must stand fully at the timeline's very first
+// instant, not only start construction there.
+// ============================================================================
+
+test("fabricHistoryAt: at uYear === YEAR_MIN, the origin stage's born is clamped to YEAR_MIN - BUILD_YEARS or earlier", () => {
+  for (let seed = 0; seed < 200; seed++) {
+    const s = seed * 2654435761;
+    const history = fabricHistoryAt(YEAR_MIN, 1, true, s);
+    assert.ok(
+      history[0].born <= YEAR_MIN - BUILD_YEARS,
+      `expected born <= ${YEAR_MIN - BUILD_YEARS}, got ${history[0].born} (seed ${s})`
+    );
+  }
+});
+
+test("fabricHistoryAt: the YEAR_MIN clamp leaves uYear > YEAR_MIN untouched (born still uYear + originJitter)", () => {
+  for (let seed = 0; seed < 100; seed++) {
+    const s = seed * 2654435761;
+    const uYear = YEAR_MIN + 1; // one year after the timeline's origin
+    const history = fabricHistoryAt(uYear, 0.6, true, s);
+    assert.equal(history[0].born, uYear + originJitter(s));
+  }
+});
+
+test("fabricHistoryAt: at YEAR_MIN, the origin (gaulois) stage is fully present (presence === 1), not just started", () => {
+  let anyFullyPresent = false;
+  for (let seed = 0; seed < 500; seed++) {
+    const s = seed * 2654435761;
+    const history = fabricHistoryAt(YEAR_MIN, 1, true, s);
+    const died = history.length > 1 ? history[1].born : Infinity;
+    const presence = lifecycle(YEAR_MIN, {
+      born: history[0].born,
+      buildYears: BUILD_YEARS,
+      died,
+      razeYears: RAZE_YEARS,
+    }).presence;
+    assert.equal(history[0].family, "gaulois");
+    assert.equal(presence, 1, `expected presence 1 at YEAR_MIN, got ${presence} (seed ${s})`);
+    if (presence === 1) anyFullyPresent = true;
+  }
+  assert.ok(anyFullyPresent);
+});
+
+test("island cells: at YEAR_MIN, real île de la Cité cells produce N > 0 fully-present (presence=1) gaulois building instances (Critical 1)", () => {
+  // Mirrors `generate()`'s own pipeline (grid -> isBuildableCell -> placeCell
+  // -> fabricHistoryAt -> expandHistory's died-of-next-stage rule) using only
+  // the exported pure functions, so this exercises the real fix end-to-end
+  // without needing a THREE scene/ctx.
+  const PERI = RINGS.peripherique;
+  const insideRing = insideEllipse(0, 0, PERI.cx, PERI.cz, PERI.rx, PERI.rz);
+  assert.ok(insideRing, "the Cité should be inside the périphérique");
+
+  let fullyPresentCount = 0;
+  const ixSpan = Math.ceil((ISLANDS.cite.rx + CELL) / CELL) + 1;
+  const izSpan = Math.ceil((ISLANDS.cite.rz + CELL) / CELL) + 1;
+  const centerIx = Math.floor(ISLANDS.cite.x / CELL);
+  const centerIz = Math.floor(ISLANDS.cite.z / CELL);
+
+  for (let ix = centerIx - ixSpan; ix <= centerIx + ixSpan; ix++) {
+    for (let iz = centerIz - izSpan; iz <= centerIz + izSpan; iz++) {
+      const cx = cellCenterX(ix);
+      const cz = cellCenterZ(iz);
+      const uYear = urbanYear(cx, cz);
+      if (uYear !== YEAR_MIN) continue; // not an île de la Cité cell
+      if (!isBuildableCell(cx, cz, uYear, YEAR_MAX)) continue;
+      const density = densityAt(cx, cz);
+      const placed = placeCell(ix, iz, uYear, YEAR_MAX, density, insideRing);
+      for (const p of placed) {
+        const history = fabricHistoryAt(uYear, density, insideRing, p.seed);
+        const died = history.length > 1 ? history[1].born : Infinity;
+        const presence = lifecycle(YEAR_MIN, {
+          born: history[0].born,
+          buildYears: BUILD_YEARS,
+          died,
+          razeYears: RAZE_YEARS,
+        }).presence;
+        if (history[0].family === "gaulois" && presence === 1) fullyPresentCount++;
+      }
+    }
+  }
+
+  assert.ok(
+    fullyPresentCount > 0,
+    "expected at least one fully-present (presence=1) gaulois building on the île de la Cité at YEAR_MIN"
+  );
+});
+
+// ============================================================================
+// debugCounts semantics (review fix, Important 2) — the ground-truth easing
+// (lifecycle -> easeOutBack) used by `touch`/`debugCounts` must produce the
+// same visGrow the applied state is compared against.
+// ============================================================================
+
+test("debugCounts ground truth: easeOutBack(lifecycle(...).presence) is 0 exactly when absent, 1 exactly when fully alive", () => {
+  const born = 1300;
+  assert.equal(
+    easeOutBack(lifecycle(born - 5, { born, buildYears: BUILD_YEARS, razeYears: RAZE_YEARS }).presence),
+    0
+  );
+  assert.equal(
+    easeOutBack(
+      lifecycle(born + BUILD_YEARS + 50, { born, buildYears: BUILD_YEARS, razeYears: RAZE_YEARS }).presence
+    ),
+    1
+  );
 });
