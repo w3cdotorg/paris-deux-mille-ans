@@ -5,6 +5,7 @@ import * as buildings from "./layers/buildings.js";
 import * as walls from "./layers/walls.js";
 import * as monuments from "./layers/monuments.js";
 import * as rails from "./layers/rails.js";
+import * as ghosts from "./layers/ghosts.js";
 import { createControls } from "./controls.js";
 import * as ui from "./ui.js";
 
@@ -52,7 +53,11 @@ const ctx = { scene, renderer, camera, quality };
 // rails après monuments : même dépendance au terrain (groundHeightAt), et
 // leurs couloirs (geography.insideRailCorridor) sont déjà pris en compte par
 // buildings.js à sa génération.
-const layers = [terrain, buildings, walls, monuments, rails];
+// ghosts en dernier : la Tour Eiffel fantôme et la balise « chez nous » sont
+// en matériau additif sans écriture de profondeur — elles doivent se dessiner
+// *après* tout le reste (bâtiments, monuments, rails) pour ne pas produire
+// d'artefacts de tri avec ce qui se trouve derrière elles.
+const layers = [terrain, buildings, walls, monuments, rails, ghosts];
 for (const layer of layers) {
   layer.init(ctx);
 }
@@ -142,6 +147,11 @@ function setYear(year) {
   walls.forceRescan(state.year);
   monuments.forceRescan(state.year);
   rails.forceRescan(state.year);
+  // ghosts n'a pas de rescan coûteux à forcer (pas d'InstancedMesh à réécrire) :
+  // un simple update(0, state) suffit à recaler son opacité/visibilité sur la
+  // nouvelle année avant le rendu synchrone ci-dessous, sans attendre la
+  // prochaine frame de la boucle animate().
+  ghosts.update(0, state);
   ui.update(0, state);
   renderer.render(scene, camera);
 }
@@ -162,6 +172,8 @@ window.__paris = {
   monumentStats: () => monuments.stats(),
   railCounts: (year) => rails.debugCounts(year ?? state.year),
   railStats: () => rails.stats(),
+  ghostState: () => ghosts.debugState(state),
+  ghostStats: () => ghosts.stats(),
   // Même rôle que le bouton météo de l'UI, en un appel : la vérification
   // automatisée en a besoin pour capturer la nuit (scintillement de la tour
   // Eiffel, phares du périphérique). La tâche 14 traitera l'éclairage lui-même.
