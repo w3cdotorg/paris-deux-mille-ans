@@ -3,6 +3,7 @@ import { YEAR_MIN, YEAR_MAX } from "./timeline.js";
 import * as terrain from "./layers/terrain.js";
 import * as buildings from "./layers/buildings.js";
 import * as walls from "./layers/walls.js";
+import * as monuments from "./layers/monuments.js";
 import { createControls } from "./controls.js";
 import * as ui from "./ui.js";
 
@@ -45,7 +46,9 @@ const ctx = { scene, renderer, camera, quality };
 // buildings after terrain: it samples the *rendered* ground mesh
 // (groundHeightAt) to sit buildings on the real surface, so terrain's
 // init() (which builds that mesh) must have already run.
-const layers = [terrain, buildings, walls];
+// monuments après walls : ils lisent groundHeightAt (terrain) et occupent des
+// emplacements que buildings tient déjà libres (MONUMENT_FOOTPRINTS).
+const layers = [terrain, buildings, walls, monuments];
 for (const layer of layers) {
   layer.init(ctx);
 }
@@ -133,6 +136,7 @@ function setYear(year) {
   terrain.forceRescan(state.year);
   buildings.rebuildForYear(state.year);
   walls.forceRescan(state.year);
+  monuments.forceRescan(state.year);
   ui.update(0, state);
   renderer.render(scene, camera);
 }
@@ -149,6 +153,8 @@ window.__paris = {
   buildingStats: () => buildings.stats(),
   debugCounts: (year) => buildings.debugCounts(year ?? state.year),
   wallCounts: (year) => walls.debugCounts(year ?? state.year),
+  monumentCounts: (year) => monuments.debugCounts(year ?? state.year),
+  monumentStats: () => monuments.stats(),
   renderer,
   scene,
 };

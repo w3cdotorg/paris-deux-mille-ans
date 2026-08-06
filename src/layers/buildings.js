@@ -42,7 +42,14 @@
  */
 
 import * as THREE from "three";
-import { urbanYear, distanceToSeine, RINGS, LANDMARKS, ISLANDS } from "../geography.js";
+import {
+  urbanYear,
+  distanceToSeine,
+  RINGS,
+  LANDMARKS,
+  ISLANDS,
+  insideMonumentFootprint,
+} from "../geography.js";
 import { lerp, smoothstep, lifecycle, easeOutBack } from "../timeEngine.js";
 import { YEAR_MIN, YEAR_MAX } from "../timeline.js";
 import { groundHeightAt } from "./terrain.js";
@@ -182,15 +189,27 @@ const OPEN_SPACES = [
 // moindre construction — pas franchement « spectaculaire ». 5,5 reste un
 // dégagement confortable (55 m) pour le futur maillage de la cathédrale tout
 // en laissant les 4 cellules de la Cité constructibles.
+//
+// Tâche 10 : les rayons des sites qui reçoivent désormais un vrai monument ont
+// été relevés à l'emprise réelle du maillage + une marge de dégagement
+// (`MONUMENT_FOOTPRINTS` dans geography.js donne l'emprise stricte). Restent
+// volontairement inchangés : `notreDame` (5,5 — la note ci-dessus : élargir
+// couperait les 4 cellules de l'île, donc les huttes gauloises de -250) et
+// `sainteChapelle`/`pontAuChange`, absents d'ici pour la même raison — ces
+// trois-là sont traités *bâtiment par bâtiment* dans `placeCell` via
+// `insideMonumentFootprint`, ce qui garde l'île habitée tout en laissant la
+// cathédrale et la chapelle libres.
 const LANDMARK_CLEARANCE = {
   notreDame: 5.5,
   louvre: 22,
   bastille: 6,
   tourEiffel: 12,
   sacreCoeur: 9,
-  arenes: 5,
-  thermes: 5,
-  pantheon: 7,
+  arenes: 9, // arènes : demi-grand axe 7,0 + marge
+  thermes: 6,
+  pantheon: 8,
+  forum: 6,
+  invalides: 10,
   laDefense: 11,
   chezNous: 3, // volontairement minuscule : on veut le tissu du 18e autour
 };
@@ -673,9 +692,18 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
       yaw = -Math.PI / 2;
     }
 
+    const wx = cx + lx * cosR - lz * sinR;
+    const wz = cz + lx * sinR + lz * cosR;
+    // Emprise d'un monument (tâche 10) : on saute *ce* bâtiment sans toucher au
+    // curseur d'arête déjà avancé — la cellule garde donc ses autres maisons et
+    // il se creuse juste un vide là où se dresse le monument. Indispensable sur
+    // l'île de la Cité, dont les 4 cellules doivent rester constructibles pour
+    // les huttes de -250 (voir LANDMARK_CLEARANCE.notreDame).
+    if (insideMonumentFootprint(wx, wz)) continue;
+
     out.push({
-      x: cx + lx * cosR - lz * sinR,
-      z: cz + lx * sinR + lz * cosR,
+      x: wx,
+      z: wz,
       rot: yaw + cellRot + (roll(seed, 41) - 0.5) * 0.05,
       scale,
       scaleY,

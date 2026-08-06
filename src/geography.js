@@ -99,7 +99,72 @@ export const LANDMARKS = {
   thermes: { x: -43, z: 28 },
   pantheon: { x: -26, z: 76 },
   laDefense: { x: -834, z: -433 },
+  // --- sites de monuments ajoutés par la tâche 10 -------------------------
+  forum: { x: -30, z: 55 },
+  // Sainte-Chapelle : le brief proposait (-5, -3), mais à notre échelle d'île
+  // (rx=12, soit 240 m pour ~1 km réel) ce point tombe *dans* la façade
+  // occidentale de Notre-Dame (dont la nef s'étend de x=-5,6 à x=+6,2, z ±2,8).
+  // Reposée à l'ouest sur l'emplacement réel du palais de la Cité : à -9,2, la
+  // chapelle (3,4 de long) laisse ~2 unités de dégagement devant les tours, et
+  // l'île y est encore large de |z| ≤ 3,05 — la première capture montrait les
+  // deux monuments collés, seule la flèche dorée dépassant du toit voisin.
+  sainteChapelle: { x: -9.2, z: -0.6 },
+  invalides: { x: -230, z: -20 },
+  // Pont au Change : calé pour franchir *réellement* le ruban de Seine rendu
+  // par terrain.js (demi-largeur 7 autour de l'axe, voir buildRiverGeometry).
+  // L'axe passe par (0,0) puis (-40,-15) : la normale « vers le nord » vaut
+  // donc (0,351 ; -0,937). Départ sur la berge nord de l'île vers x=-10
+  // (|z| = 2,8 à cet endroit), arrivée sur la rive droite après ~8,4 unités,
+  // soit au-delà du bord nord de l'eau (z ≈ -9,6 pour x ≈ -5,5).
+  pontAuChange: { x: -8.6, z: -6.6 },
 };
+
+/**
+ * Emprise au sol réellement occupée par les maillages de monuments (tâche 10),
+ * tous états confondus, en tant que disque {x, z, r} — la source unique
+ * partagée entre `monuments.js` (qui pose les modèles) et `buildings.js` (qui
+ * refuse d'y placer un bâtiment procédural). `LANDMARK_CLEARANCE` de
+ * buildings.js opère à la maille de la *cellule* (8 unités) : c'est le bon
+ * outil pour les grands monuments entourés de jardins, mais pas sur l'île de
+ * la Cité, où écarter les 4 cellules de l'île supprimerait aussi les huttes
+ * gauloises de -250 (voir la longue note de LANDMARK_CLEARANCE). Ce disque-ci
+ * est donc testé bâtiment par bâtiment : la cathédrale garde son parvis net
+ * *et* l'île garde ses maisons blotties autour.
+ *
+ * Rayons dérivés des modèles de `monumentModels.js` (demi-diagonale de
+ * l'emprise + petite marge) ; centre légèrement décalé quand le monument n'est
+ * pas centré sur son point d'ancrage (Notre-Dame s'étend vers l'est).
+ */
+export const MONUMENT_FOOTPRINTS = [
+  // Rayons = demi-diagonale de la boîte englobante de *tous* les états du site,
+  // mesurée sur les modèles eux-mêmes, plus ~0,3 de marge. Le test
+  // « emprises : couvrent réellement l'étendue des modèles » de
+  // test/monuments.test.js refait ce calcul et échoue si un modèle grandit
+  // au-delà de son disque (ou si un disque devient inutilement large).
+  { id: "notreDame", x: -0.2, z: 0, r: 7.2 },
+  { id: "sainteChapelle", x: -8.8, z: -0.6, r: 2.9 },
+  { id: "louvre", x: -96.2, z: -84, r: 15.4 },
+  { id: "arenes", x: 21.9, z: 88.7, r: 9.8 },
+  { id: "thermes", x: -43.15, z: 28, r: 5.2 },
+  { id: "forum", x: -30.2, z: 55, r: 5.6 },
+  { id: "pantheon", x: -26, z: 76.9, r: 5.5 },
+  { id: "invalides", x: -230, z: -21, r: 8.0 },
+];
+
+/**
+ * Le point (x, z) tombe-t-il dans l'emprise d'un monument ?
+ * @param {number} x
+ * @param {number} z
+ * @returns {boolean}
+ */
+export function insideMonumentFootprint(x, z) {
+  for (const f of MONUMENT_FOOTPRINTS) {
+    const dx = x - f.x;
+    const dz = z - f.z;
+    if (dx * dx + dz * dz < f.r * f.r) return true;
+  }
+  return false;
+}
 
 // ============================================================================
 // RINGS — périphérique (Thiers) and petite ceinture ellipses

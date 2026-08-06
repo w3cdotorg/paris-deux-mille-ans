@@ -19,6 +19,7 @@ import {
   SEINE_POINTS,
   SEINE_ONMAP_COUNT,
   ISLANDS,
+  insideMonumentFootprint,
 } from "../geography.js";
 import { lifecycle, lerp, smoothstep } from "../timeEngine.js";
 
@@ -533,6 +534,11 @@ function buildForestCandidates(quality) {
 
       const distSeine = distanceToSeine(x, z);
       if (distSeine < SEINE_TREE_MARGIN) continue;
+      // Emprise d'un monument (tâche 10) : la forêt recule pour de bon devant
+      // les arènes, le Panthéon ou la forteresse du Louvre — sans ce filtre, un
+      // sapin poussait au milieu de la cour du donjon aux années où le quartier
+      // n'est pas encore urbanisé (constaté sur la capture task10-louvre-1300).
+      if (insideMonumentFootprint(x, z)) continue;
 
       const uYear = urbanYear(x, z);
       const archetype = Math.floor(hash01(gx, gz, 33) * 3);
