@@ -45,7 +45,7 @@
  * reconstruit les matrices d'année que quand `state.year` change.
  */
 
-import { LANDMARKS } from "../geography.js";
+import { LANDMARKS, MONUMENT_FOOTPRINTS } from "../geography.js";
 import { lifecycle, easeOutBack } from "../timeEngine.js";
 import { groundHeightAt } from "./terrain.js";
 import { MODEL_BUILDERS } from "../monumentModels.js";
@@ -436,12 +436,17 @@ function applyEntry(entry, presence, phase) {
   group.visible = true;
 
   const razing = phase === "razing";
-  // Pendant la démolition, tout le monument redescend ensemble (aucun étage :
-  // une cathédrale ne se dé-construit pas tour d'abord). Pendant le chantier,
-  // chaque pièce suit sa fenêtre `stage`.
-  const globalGrow = razing ? presence : 1;
-  // Ensevelissement (arènes) : le groupe s'enfonce au lieu de rétrécir.
-  const sink = entry.state.bury && razing ? (1 - presence) * entry.buriedDepth : 0;
+  // Ensevelissement (arènes, 300-380) : le monument garde sa taille et
+  // **s'enfonce** dans le sol au lieu de rétrécir — c'est ce qui raconte
+  // « la terre les a recouvertes » plutôt que « on les a démolies ». Cumuler
+  // les deux (rétrécir *et* couler) les faisait disparaître d'un coup dès le
+  // tiers de la fenêtre (constat de la capture task10-arenes-350).
+  const burying = razing && entry.state.bury === true;
+  // Sinon, pendant la démolition, tout le monument redescend ensemble (aucun
+  // étage : une cathédrale ne se dé-construit pas tour d'abord). Pendant le
+  // chantier, chaque pièce suit sa fenêtre `stage`.
+  const globalGrow = razing && !burying ? presence : 1;
+  const sink = burying ? (1 - presence) * entry.buriedDepth : 0;
   group.position.y = entry.baseY - sink;
 
   for (const child of group.children) {
@@ -467,7 +472,7 @@ function applyEntry(entry, presence, phase) {
     }
     child.visible = true;
     if (!ud.grow) continue;
-    const grow = razing ? t : easeOutBack(t, 0.45);
+    const grow = burying ? 1 : razing ? t : easeOutBack(t, 0.45);
     const scaled = ud.h * grow * globalGrow;
     child.scale.set(ud.sx, scaled, ud.sz);
     child.position.y = ud.anchor === "base" ? ud.y0 : ud.y0 + scaled / 2;
@@ -491,6 +496,34 @@ function rescanAll(year) {
   }
 }
 
+/**
+ * Altitude de pose d'un site : la **moyenne** du sol échantillonné au centre et
+ * aux quatre coins de son emprise, et non la seule valeur au centre. Un modèle
+ * est un bloc rigide, et les grands (arènes, Panthéon, Louvre) couvrent 10 à 30
+ * unités de terrain en pente — sur la montagne Sainte-Geneviève, la dénivelée
+ * atteint ~1 unité (10 m) d'un bord à l'autre de l'emprise des arènes. Moyenner
+ * répartit l'erreur (un peu enterré en amont, un peu décollé en aval) au lieu de
+ * la concentrer d'un côté : le minimum des échantillons, essayé d'abord,
+ * engloutissait la moitié amont des gradins (capture task10-arenes-200).
+ * Purement déterministe (groundHeightAt l'est), calculé une fois à l'init.
+ * @param {{x:number, z:number, id:string}} m
+ * @returns {number}
+ */
+function siteBaseY(m) {
+  const footprint = MONUMENT_FOOTPRINTS.find((f) => f.id === m.id);
+  const r = (footprint ? footprint.r : 4) * 0.7;
+  let sum = groundHeightAt(m.x, m.z);
+  for (const [dx, dz] of [
+    [-1, -1],
+    [-1, 1],
+    [1, -1],
+    [1, 1],
+  ]) {
+    sum += groundHeightAt(m.x + dx * r, m.z + dz * r);
+  }
+  return sum / 5;
+}
+
 export function init(ctx) {
   entries = [];
   spinners = [];
@@ -499,7 +532,7 @@ export function init(ctx) {
       const build = MODEL_BUILDERS[st.model];
       if (!build) throw new Error(`monuments: modèle inconnu « ${st.model} » (site ${m.id})`);
       const group = build();
-      const baseY = m.baseY ?? groundHeightAt(m.x, m.z);
+      const baseY = m.baseY ?? siteBaseY(m);
       group.position.set(m.x, baseY, m.z);
       if (m.rotY) group.rotation.y = m.rotY;
       group.visible = false;
