@@ -1283,12 +1283,62 @@ function eiffelLeg(g, matKey, { phi, y0, y1, r0, r1, thick, stage }) {
   });
 }
 
-/** Ceinture carrée de treillis (4 membrures horizontales) à l'altitude y0. */
-function eiffelBelt(g, matKey, { y0, half, thick, h, stage }) {
-  box(g, matKey, { x: 0, z: -half, y0, w: half * 2, h, d: thick, stage });
-  box(g, matKey, { x: 0, z: half, y0, w: half * 2, h, d: thick, stage });
-  box(g, matKey, { x: -half, z: 0, y0, w: thick, h, d: half * 2, stage });
-  box(g, matKey, { x: half, z: 0, y0, w: thick, h, d: half * 2, stage });
+/**
+ * Membrure diagonale générique entre deux points quelconques de l'espace —
+ * généralisation d'`eiffelLeg` pour les croisillons des registres ouverts :
+ * les côtés d'un registre ne passent pas par l'axe de la tour, donc la
+ * paramétrisation radiale (azimut + rayon) d'`eiffelLeg` ne s'applique pas
+ * ici. Même méthode : `rotY` aligne la projection horizontale du segment,
+ * `rotZ` bascule ensuite le long axe local (Y) vers la pente réelle.
+ */
+function diagBrace(g, matKey, { x0, y0, z0, x1, y1, z1, thick, stage }) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const dz = z1 - z0;
+  const horiz = Math.hypot(dx, dz);
+  const phi = Math.atan2(dz, dx);
+  const len = Math.hypot(horiz, dy);
+  const tilt = Math.atan2(-horiz, dy);
+  box(g, matKey, {
+    x: (x0 + x1) / 2,
+    z: (z0 + z1) / 2,
+    y0: 0,
+    yc: (y0 + y1) / 2,
+    w: thick,
+    h: len,
+    d: thick,
+    rotY: -phi,
+    rotZ: tilt,
+    stage,
+  });
+}
+
+/**
+ * Registre OUVERT (garde-corps en treillis) à l'altitude y0 : quatre poteaux
+ * d'angle + un croisillon en X par côté, rien d'autre. Remplace l'ancienne
+ * `eiffelBelt` — quatre boîtes pleines qui refermaient tout le pourtour et,
+ * empilées avec le plateau (aucun jeu vertical), fusionnaient en un disque
+ * opaque : c'est le défaut « pagode/tabouret » repéré sur la capture 1888 de
+ * la revue de la tâche 11. Ici le ciel doit rester visible entre les poteaux
+ * et à travers chaque X, à toutes les étapes du chantier.
+ */
+function eiffelLattice(g, matKey, { y0, h, half, postThick = 0.14, braceThick = 0.12, stage }) {
+  const yTop = y0 + h;
+  const corners = [
+    [half, half],
+    [half, -half],
+    [-half, -half],
+    [-half, half],
+  ];
+  for (const [x, z] of corners) {
+    box(g, matKey, { x, z, y0, w: postThick, h, d: postThick, stage });
+  }
+  for (let i = 0; i < 4; i++) {
+    const [xa, za] = corners[i];
+    const [xb, zb] = corners[(i + 1) % 4];
+    diagBrace(g, matKey, { x0: xa, y0, z0: za, x1: xb, y1: yTop, z1: zb, thick: braceThick, stage });
+    diagBrace(g, matKey, { x0: xb, y0, z0: zb, x1: xa, y1: yTop, z1: za, thick: braceThick, stage });
+  }
 }
 
 /**
@@ -1398,10 +1448,9 @@ export function buildTourEiffel() {
       stage: [0.15, 0.25],
     });
   }
-  eiffelBelt(g, "ironDark", {
+  eiffelLattice(g, "ironDark", {
     y0: 4.5,
     half: eiffelHalfSpanAt(4.5),
-    thick: 0.5,
     h: 0.45,
     stage: [0.18, 0.25],
   });
@@ -1410,12 +1459,16 @@ export function buildTourEiffel() {
   // Le plateau **déborde** franchement des piliers (8,4 contre ±3,5 pour les
   // montants) : à la première capture, un plateau juste à l'aplomb des piliers
   // ne se lisait pas du tout — la tour n'avait visiblement pas d'étages, juste
-  // un tronc qui s'affine. Le bandeau sombre en dessous (le garde-corps de la
-  // galerie) est ce qui fait vraiment apparaître le « plateau » vu de loin.
-  eiffelBelt(g, "ironDark", {
-    y0: EIFFEL_FLOOR1 - 0.35,
+  // un tronc qui s'affine. Mais la revue de la tâche 11 a trouvé pire : les
+  // deux garde-corps + le plateau, empilés SANS le moindre jeu vertical et
+  // pleins sur tout le pourtour, fusionnaient en un disque opaque (« pagode/
+  // tabouret »). Trois corrections : (1) de vrais jeux verticaux entre les
+  // trois registres, (2) les garde-corps sont maintenant des treillis OUVERTS
+  // (`eiffelLattice` : poteaux d'angle + X, le ciel passe entre), (3) le
+  // plateau est aminci à un vrai plancher fin (0,18 contre 0,55 avant).
+  eiffelLattice(g, "ironDark", {
+    y0: EIFFEL_FLOOR1 - 0.55,
     half: 4.3,
-    thick: 0.4,
     h: 0.4,
     stage: [0.25, 0.34],
   });
@@ -1424,14 +1477,13 @@ export function buildTourEiffel() {
     z: 0,
     y0: EIFFEL_FLOOR1,
     w: 8.4,
-    h: 0.55,
+    h: 0.18,
     d: 8.4,
     stage: [0.26, 0.38],
   });
-  eiffelBelt(g, "ironDark", {
-    y0: EIFFEL_FLOOR1 + 0.55,
+  eiffelLattice(g, "ironDark", {
+    y0: EIFFEL_FLOOR1 + 0.35,
     half: 4.15,
-    thick: 0.18,
     h: 0.4,
     stage: [0.3, 0.42],
   });
@@ -1451,20 +1503,20 @@ export function buildTourEiffel() {
       });
     }
   }
-  eiffelBelt(g, "ironDark", {
+  eiffelLattice(g, "ironDark", {
     y0: 8.6,
     half: eiffelHalfSpanAt(8.6),
-    thick: 0.28,
     h: 0.3,
     stage: [0.42, 0.5],
   });
 
   // --- QUART 3 : le 2e étage ----------------------------------------------
-  eiffelBelt(g, "ironDark", {
-    y0: EIFFEL_FLOOR2 - 0.3,
+  // Même correction qu'au 1er étage : jeux réels + treillis ouverts + plateau
+  // aminci.
+  eiffelLattice(g, "ironDark", {
+    y0: EIFFEL_FLOOR2 - 0.45,
     half: 2.45,
-    thick: 0.34,
-    h: 0.35,
+    h: 0.3,
     stage: [0.5, 0.58],
   });
   box(g, "iron", {
@@ -1472,15 +1524,14 @@ export function buildTourEiffel() {
     z: 0,
     y0: EIFFEL_FLOOR2,
     w: 4.8,
-    h: 0.5,
+    h: 0.18,
     d: 4.8,
     stage: [0.51, 0.62],
   });
-  eiffelBelt(g, "ironDark", {
-    y0: EIFFEL_FLOOR2 + 0.5,
+  eiffelLattice(g, "ironDark", {
+    y0: EIFFEL_FLOOR2 + 0.35,
     half: 2.35,
-    thick: 0.15,
-    h: 0.34,
+    h: 0.3,
     stage: [0.56, 0.68],
   });
   // Amorce du fût au-dessus du 2e étage (le reste monte au quart suivant).
