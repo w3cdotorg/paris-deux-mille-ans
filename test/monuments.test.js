@@ -8,8 +8,21 @@ import {
   monumentStateAt,
   init as initMonuments,
   forceRescan,
+  update as updateMonuments,
+  debugCounts,
 } from "../src/layers/monuments.js";
-import { MODEL_BUILDERS, CHANTIER_STAGE, TOWER_STAGE } from "../src/monumentModels.js";
+import {
+  MODEL_BUILDERS,
+  CHANTIER_STAGE,
+  TOWER_STAGE,
+  EIFFEL_STAGES,
+  EIFFEL_TOP,
+  EIFFEL_FLOOR3,
+  EIFFEL_SPARKLE_COUNT,
+  eiffelHalfSpanAt,
+  DEFENSE_TOWERS,
+  defenseTowerStage,
+} from "../src/monumentModels.js";
 import { ARCHETYPES } from "../src/archetypes.js";
 import { LANDMARKS, MONUMENT_FOOTPRINTS, insideMonumentFootprint } from "../src/geography.js";
 
@@ -28,19 +41,24 @@ test("registre : chaque site a un id unique, des coordonnées finies, un label e
     assert.ok(typeof m.phrase === "string" && m.phrase.length > 10, `${m.id} : phrase manquante`);
     assert.ok(Array.isArray(m.states) && m.states.length >= 1, `${m.id} : aucun état`);
   }
-  // Les 9 sites du brief.
+  // Les 9 sites de la tâche 10 + les 5 de la tâche 11.
   assert.deepEqual(
     [...ids].sort(),
     [
       "arenes",
       "forum",
       "invalides",
+      "laDefense",
       "louvre",
       "notreDame",
+      "operaGarnier",
       "pantheon",
       "pontAuChange",
+      "sacreCoeur",
       "sainteChapelle",
       "thermes",
+      "tourEiffel",
+      "tourMontparnasse",
     ]
   );
 });
@@ -530,4 +548,259 @@ test("emprises : le parvis de Notre-Dame et la Sainte-Chapelle sont interdits au
   assert.equal(insideMonumentFootprint(LANDMARKS.sainteChapelle.x, LANDMARKS.sainteChapelle.z), true);
   // ... mais l'île garde de la place ailleurs (est de l'île, vers Saint-Louis).
   assert.equal(insideMonumentFootprint(10, 3), false);
+});
+
+// ============================================================================
+// TOUR EIFFEL — les 4 quarts de chantier (tâche 11)
+// ============================================================================
+
+/** Les pièces de maçonnerie d'un modèle (hors sous-groupes animés et scintillement). */
+function modelPieces(group) {
+  return group.children.filter((c) => !c.isGroup && !c.userData.sparkle);
+}
+
+/** Quart de chantier (0..3) auquel appartient une pièce étagée. */
+function tierOf(piece) {
+  return Math.min(3, Math.floor(piece.userData.stage[0] / 0.25));
+}
+
+test("Eiffel : quatre quarts de chantier déclarés, contigus, couvrant [0,1]", () => {
+  assert.equal(EIFFEL_STAGES.length, 4);
+  assert.deepEqual(EIFFEL_STAGES, [
+    [0, 0.25],
+    [0.25, 0.5],
+    [0.5, 0.75],
+    [0.75, 1],
+  ]);
+});
+
+test("Eiffel : chaque pièce porte un étage, entièrement contenu dans un seul quart", () => {
+  const g = MODEL_BUILDERS.tourEiffel();
+  const pieces = modelPieces(g);
+  assert.ok(pieces.length >= 30, `la tour n'a que ${pieces.length} pièces`);
+  const perTier = [0, 0, 0, 0];
+  for (const p of pieces) {
+    const st = p.userData.stage;
+    assert.ok(Array.isArray(st), "une pièce de la tour Eiffel sans étage : elle apparaîtrait trop tôt");
+    const tier = tierOf(p);
+    const [lo, hi] = EIFFEL_STAGES[tier];
+    assert.ok(
+      st[0] >= lo - 1e-9 && st[1] <= hi + 1e-9,
+      `étage [${st}] à cheval sur deux quarts (quart ${tier} = [${lo}, ${hi}])`
+    );
+    perTier[tier]++;
+  }
+  for (let t = 0; t < 4; t++) {
+    assert.ok(perTier[t] >= 1, `le quart ${t} n'a aucune pièce`);
+  }
+});
+
+test("Eiffel : les dates du chantier tombent sur les vraies (1er étage 1888, sommet 1889)", () => {
+  const st = MONUMENTS.find((m) => m.id === "tourEiffel").states[0];
+  assert.equal(st.born, 1887);
+  assert.equal(st.buildYears, 2.3);
+  const yearAt = (p) => st.born + p * st.buildYears;
+  // 1er étage fini vers avril 1888, 2e vers août 1888, pointe en mars 1889.
+  assert.ok(Math.abs(yearAt(0.5) - 1888.15) < 0.1, `1er étage fini en ${yearAt(0.5)}`);
+  assert.ok(Math.abs(yearAt(0.75) - 1888.7) < 0.15, `2e étage fini en ${yearAt(0.75)}`);
+  assert.ok(Math.abs(yearAt(1) - 1889.3) < 0.05, `tour finie en ${yearAt(1)}`);
+});
+
+test("Eiffel : les étages apparaissent SUCCESSIVEMENT (0,2 → piliers ; 0,6 → 2 étages ; 1 → tout)", () => {
+  const scene = new THREE.Group();
+  initMonuments({ scene });
+  const group = scene.children.find((g) => g.name === "monument_tourEiffel");
+  assert.ok(group, "groupe de la tour Eiffel introuvable");
+  const pieces = modelPieces(group);
+  const byTier = [0, 1, 2, 3].map((t) => pieces.filter((p) => tierOf(p) === t));
+
+  const st = MONUMENTS.find((m) => m.id === "tourEiffel").states[0];
+  const yearAt = (p) => st.born + p * st.buildYears;
+  const visibleIn = (tier) => byTier[tier].filter((p) => p.visible).length;
+
+  // 0,2 : les piliers et l'arche montent, rien au-dessus.
+  forceRescan(yearAt(0.2));
+  assert.ok(visibleIn(0) > 0, "les piliers doivent être visibles à 20 %");
+  assert.equal(visibleIn(1), 0, "aucun 1er étage à 20 %");
+  assert.equal(visibleIn(2), 0, "aucun 2e étage à 20 %");
+  assert.equal(visibleIn(3), 0, "aucune flèche à 20 %");
+
+  // 0,6 : les piliers et le 1er étage sont finis, le 2e monte, pas de flèche.
+  forceRescan(yearAt(0.6));
+  assert.equal(visibleIn(0), byTier[0].length, "les piliers sont finis à 60 %");
+  assert.equal(visibleIn(1), byTier[1].length, "le 1er étage est fini à 60 %");
+  assert.ok(visibleIn(2) > 0, "le 2e étage doit monter à 60 %");
+  assert.equal(visibleIn(3), 0, "aucune flèche à 60 % — c'est la photo de 1888");
+
+  // 1 : tout est là, et la pointe est bien à 30 unités (300 m).
+  forceRescan(yearAt(1));
+  for (let t = 0; t < 4; t++) {
+    assert.equal(visibleIn(t), byTier[t].length, `quart ${t} incomplet à la fin du chantier`);
+  }
+  let top = 0;
+  for (const p of pieces) top = Math.max(top, p.userData.y0 + p.userData.h);
+  assert.ok(Math.abs(top - EIFFEL_TOP) < 1e-6, `sommet à ${top}, attendu ${EIFFEL_TOP}`);
+});
+
+test("Eiffel : elle domine tout — plus haute que la tour Montparnasse et que La Défense", () => {
+  const topOf = (name) => {
+    const g = MODEL_BUILDERS[name]();
+    let top = 0;
+    for (const c of g.children) {
+      if (c.isGroup || c.userData.sparkle) continue;
+      top = Math.max(top, c.userData.y0 + c.userData.h);
+    }
+    return top;
+  };
+  const eiffel = topOf("tourEiffel");
+  assert.ok(eiffel > topOf("tourMontparnasse") * 1.3, "la tour Eiffel doit dominer Montparnasse");
+  assert.ok(eiffel > topOf("laDefense") * 1.3, "la tour Eiffel doit dominer La Défense");
+  assert.ok(eiffel > topOf("cathedraleGothique") * 3, "la tour Eiffel doit écraser Notre-Dame");
+});
+
+test("Eiffel : le scintillement n'existe qu'achevé, la nuit, et après 2000", () => {
+  const scene = new THREE.Group();
+  initMonuments({ scene });
+  const group = scene.children.find((g) => g.name === "monument_tourEiffel");
+  const field = group.children.find((c) => c.userData.sparkle);
+  assert.ok(field, "champ scintillant introuvable");
+  assert.equal(field.count, EIFFEL_SPARKLE_COUNT);
+  assert.equal(field.userData.positions.length, EIFFEL_SPARKLE_COUNT * 3);
+  // Tous les points sont sur la structure : dans l'emprise et sous le 3e étage.
+  for (let i = 0; i < EIFFEL_SPARKLE_COUNT; i++) {
+    const x = field.userData.positions[i * 3];
+    const y = field.userData.positions[i * 3 + 1];
+    const z = field.userData.positions[i * 3 + 2];
+    assert.ok(y > 0 && y <= EIFFEL_FLOOR3, `point ${i} hors hauteur : ${y}`);
+    const half = eiffelHalfSpanAt(y) + 1e-6;
+    assert.ok(Math.abs(x) <= half && Math.abs(z) <= half, `point ${i} hors emprise à y=${y}`);
+  }
+
+  const state = (year, weather) => ({ year, weather, time: 4, reducedMotion: false });
+
+  // 1950 : la tour est là mais elle ne scintille pas encore, même la nuit.
+  forceRescan(1950);
+  updateMonuments(0.016, state(1950, "night"));
+  assert.equal(field.visible, false, "pas de scintillement avant 2000");
+
+  // 2026 de jour : rien non plus.
+  forceRescan(2026);
+  updateMonuments(0.016, state(2026, "sun"));
+  assert.equal(field.visible, false, "pas de scintillement en plein jour");
+
+  // 2026 la nuit : ça pétille.
+  updateMonuments(0.016, state(2026, "night"));
+  assert.equal(field.visible, true, "la tour doit scintiller la nuit après 2000");
+  assert.equal(debugCounts(2026).sparkleFieldsLit, 1);
+
+  // ... et le scintillement bouge dans le temps (sauf sous reducedMotion).
+  const m = new THREE.Matrix4();
+  const readScales = () => {
+    const out = [];
+    for (let i = 0; i < EIFFEL_SPARKLE_COUNT; i++) {
+      field.getMatrixAt(i, m);
+      out.push(m.elements[0]);
+    }
+    return out;
+  };
+  const a = readScales();
+  updateMonuments(0.016, { year: 2026, weather: "night", time: 40, reducedMotion: false });
+  const b = readScales();
+  assert.notEqual(JSON.stringify(a), JSON.stringify(b), "le scintillement doit clignoter");
+
+  updateMonuments(0.016, { year: 2026, weather: "night", time: 80, reducedMotion: true });
+  const c1 = readScales();
+  updateMonuments(0.016, { year: 2026, weather: "night", time: 200, reducedMotion: true });
+  assert.equal(JSON.stringify(c1), JSON.stringify(readScales()), "figé sous reducedMotion");
+  assert.ok(c1.every((s) => s > 0), "sous reducedMotion, tous les points restent allumés");
+});
+
+// ============================================================================
+// LA DÉFENSE — 8 tours qui poussent l'une après l'autre + la Grande Arche
+// ============================================================================
+
+test("La Défense : 8 tours, chacune avec sa propre fenêtre, étalées de 1970 à ~2010", () => {
+  assert.equal(DEFENSE_TOWERS.length, 8);
+  const st = MONUMENTS.find((m) => m.id === "laDefense").states.find((s) => s.id === "tours");
+  const yearAt = (p) => st.born + p * st.buildYears;
+  let previousEnd = -Infinity;
+  for (let i = 0; i < 8; i++) {
+    const [a, b] = defenseTowerStage(i);
+    assert.ok(b > a, `fenêtre vide pour la tour ${i}`);
+    assert.ok(a >= previousEnd - 0.05, "les tours doivent se succéder, pas surgir ensemble");
+    previousEnd = b;
+  }
+  assert.ok(yearAt(defenseTowerStage(0)[1]) < 1980, "la 1re tour est finie avant 1980");
+  const last = yearAt(defenseTowerStage(7)[1]);
+  assert.ok(last > 2000 && last < 2015, `la dernière tour est finie en ${last}`);
+});
+
+test("La Défense : en 1980 quelques tours seulement, en 2026 les huit + la Grande Arche", () => {
+  const scene = new THREE.Group();
+  initMonuments({ scene });
+  const towers = scene.children.find((g) => g.name === "monument_laDefense");
+  const arche = scene.children.find((g) => g.name === "monument_grandeArche");
+  assert.ok(towers && arche);
+
+  const slabs = towers.children.filter(
+    (c) => !c.isGroup && DEFENSE_TOWERS.some((t) => Math.abs(c.userData.h - t.h) < 1e-9 && c.userData.sx > 1)
+  );
+  assert.equal(slabs.length, 8, "les 8 fûts doivent être identifiables");
+  const visible = () => slabs.filter((c) => c.visible).length;
+
+  forceRescan(1968);
+  assert.equal(towers.visible, false, "rien avant 1970");
+
+  forceRescan(1980);
+  assert.ok(visible() > 0 && visible() < 8, `en 1980, ${visible()} tours sur 8`);
+  assert.equal(arche.visible, false, "la Grande Arche n'existe pas encore en 1980");
+
+  forceRescan(1987);
+  assert.equal(arche.visible, true, "la Grande Arche est en chantier en 1987");
+
+  forceRescan(2026);
+  assert.equal(visible(), 8, "les 8 tours sont là en 2026");
+  assert.equal(arche.visible, true);
+});
+
+// ============================================================================
+// Sacré-Cœur, Opéra, Montparnasse — présence aux années clés
+// ============================================================================
+
+test("Sacré-Cœur : chantier de 1875 à 1914, campanile en dernier", () => {
+  const st = MONUMENTS.find((m) => m.id === "sacreCoeur").states[0];
+  assert.equal(st.born, 1875);
+  assert.equal(st.born + st.buildYears, 1914);
+  assert.equal(monumentStateAt(1870, "sacreCoeur", "basilique").presence, 0);
+  assert.equal(monumentStateAt(1900, "sacreCoeur", "basilique").phase, "building");
+  assert.equal(monumentStateAt(1930, "sacreCoeur", "basilique").phase, "alive");
+
+  // Le campanile (les pièces les plus au nord, z ≈ -4,2) monte dans le dernier
+  // cinquième du chantier.
+  const g = MODEL_BUILDERS.sacreCoeur();
+  const campanile = g.children.filter((c) => c.position.z < -3.5);
+  assert.ok(campanile.length >= 3, "le campanile doit avoir plusieurs pièces");
+  for (const c of campanile) {
+    assert.ok(c.userData.stage[0] >= 0.8, `pièce du campanile trop précoce : ${c.userData.stage}`);
+  }
+});
+
+test("Opéra et Montparnasse : aux bonnes années, et Montparnasse fait bien 21 unités", () => {
+  assert.equal(monumentStateAt(1855, "operaGarnier", "opera").presence, 0);
+  assert.equal(monumentStateAt(1880, "operaGarnier", "opera").phase, "alive");
+  assert.equal(monumentStateAt(1965, "tourMontparnasse", "tour").presence, 0);
+  assert.equal(monumentStateAt(1971, "tourMontparnasse", "tour").phase, "building");
+  assert.equal(monumentStateAt(1975, "tourMontparnasse", "tour").phase, "alive");
+
+  const g = MODEL_BUILDERS.tourMontparnasse();
+  let top = 0;
+  let tallestPiece = 0;
+  for (const c of g.children) {
+    top = Math.max(top, c.userData.y0 + c.userData.h);
+    tallestPiece = Math.max(tallestPiece, c.userData.h);
+  }
+  // Le fût lui-même mesure 21 unités (210 m, la vraie cote) ; avec le socle et
+  // les locaux techniques du toit, le point le plus haut est un peu au-dessus.
+  assert.equal(tallestPiece, 21.0);
+  assert.ok(top > 21.5 && top < 23.5, `sommet de Montparnasse à ${top}`);
 });

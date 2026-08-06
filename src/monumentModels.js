@@ -67,6 +67,19 @@ export const MONUMENT_COLORS = {
   sand: 0xd6c9a5,
   grass: 0x6f8f52,
   metal: 0x9aa0a6, // échafaudage 2019-2024
+  // --- tâche 11 -----------------------------------------------------------
+  iron: 0x7a5f47, // « brun tour Eiffel » (la vraie teinte du fer peint)
+  ironDark: 0x5c4634, // treillis dans l'ombre, membrures fines
+  travertine: 0xf2ede2, // le calcaire de Château-Landon du Sacré-Cœur, qui blanchit
+  travertineShadow: 0xdcd6c6,
+  copper: 0x6f9f88, // cuivre oxydé (toits de l'Opéra)
+  operaStone: 0xe3d6b9,
+  darkGlass: 0x3b414b, // Tour Montparnasse
+  darkGlassLight: 0x4c545f,
+  towerGlassA: 0x7e8d9e, // La Défense — trois verres pour varier le cluster
+  towerGlassB: 0x67788a,
+  towerGlassC: 0x94a1ac,
+  concrete: 0xdcd8d0, // marbre blanc de la Grande Arche
 };
 
 // Matériaux partagés : créés une fois, réutilisés par tous les modèles.
@@ -1173,6 +1186,642 @@ export function buildInvalides() {
 }
 
 // ============================================================================
+// TOUR EIFFEL (1887-1889) — le monument qui monte ÉTAGE PAR ÉTAGE
+// ============================================================================
+//
+// C'est le cas d'école de l'étagement (`stage`). La tour ne grandit pas d'un
+// scale global : ses quatre quarts de chantier sont des *ensembles de pièces*
+// distincts qui apparaissent l'un après l'autre, exactement comme les tours de
+// Notre-Dame arrivent en dernier.
+//
+//   [0    , 0.25] les 4 piliers évasés + la grande arche      → 1887,0-1887,6
+//   [0.25 , 0.5 ] le 1er étage (plateforme + montants)        → 1887,6-1888,2
+//   [0.5  , 0.75] le 2e étage                                 → 1888,2-1888,7
+//   [0.75 , 1   ] le fût supérieur, le campanile, l'antenne    → 1888,7-1889,3
+//
+// Ces bornes ne sont pas arbitraires : avec `born: 1887, buildYears: 2.3`
+// elles tombent sur les vraies dates du chantier (1er étage avril 1888, 2e
+// étage août 1888, sommet mars 1889). Le test de la tâche 11 les vérifie.
+//
+// Cotes réelles (1 unité = 10 m) : 125 m de côté au sol (demi-portée 6,25),
+// 1er étage à 57 m, 2e à 115 m, 3e à 276 m, pointe à 300 m. Rien n'est
+// exagéré ici — la tour écrase déjà tout le reste de la scène par sa vraie
+// hauteur, qui est précisément ce que la tâche demande de faire sentir.
+
+export const EIFFEL_TOP = 30.0;
+export const EIFFEL_FLOOR1 = 5.7;
+export const EIFFEL_FLOOR2 = 11.5;
+export const EIFFEL_FLOOR3 = 27.6;
+
+/** Les 4 quarts de chantier, exportés pour être vérifiables. */
+export const EIFFEL_STAGES = [
+  [0, 0.25],
+  [0.25, 0.5],
+  [0.5, 0.75],
+  [0.75, 1],
+];
+
+/** Nombre de points scintillants et année à partir de laquelle ils s'allument. */
+export const EIFFEL_SPARKLE_COUNT = 80;
+export const EIFFEL_SPARKLE_FROM_YEAR = 2000;
+
+/** Demi-portée (demi-côté du carré) de la tour à l'altitude y — profil concave. */
+export function eiffelHalfSpanAt(y) {
+  const knots = [
+    [0, 6.0],
+    [EIFFEL_FLOOR1, 3.5],
+    [EIFFEL_FLOOR2, 1.5],
+    [EIFFEL_FLOOR3, 0.6],
+  ];
+  if (y <= 0) return knots[0][1];
+  for (let i = 1; i < knots.length; i++) {
+    if (y <= knots[i][0]) {
+      const [y0, s0] = knots[i - 1];
+      const [y1, s1] = knots[i];
+      return s0 + ((s1 - s0) * (y - y0)) / (y1 - y0);
+    }
+  }
+  return knots[knots.length - 1][1];
+}
+
+/** Hash déterministe local (même famille que geography.js) — points scintillants. */
+function hash01(a, b) {
+  let h = (a * 374761393 + b * 668265263) | 0;
+  h = (h ^ (h >>> 13)) | 0;
+  h = Math.imul(h, 1274126177);
+  h = (h ^ (h >>> 16)) | 0;
+  return (h >>> 0) / 4294967296;
+}
+
+/**
+ * Une membrure radiale inclinée (un tronçon de pilier) : elle relie le rayon
+ * `r0` à l'altitude `y0` au rayon `r1` à l'altitude `y1`, sur la diagonale
+ * d'azimut `phi`.
+ *
+ * Repère : la pièce est posée à mi-hauteur, son axe local +X pointe *vers
+ * l'extérieur* (d'où `rotY = -phi`, puisque Ry(a) envoie +X sur
+ * (cos a, 0, -sin a)) et un `rotZ = +t` fait basculer son sommet vers
+ * l'intérieur — c'est l'évasement de la tour.
+ */
+function eiffelLeg(g, matKey, { phi, y0, y1, r0, r1, thick, stage }) {
+  const dy = y1 - y0;
+  const dr = r0 - r1; // > 0 : le haut rentre
+  const len = Math.hypot(dy, dr);
+  const tilt = Math.atan2(dr, dy);
+  const rc = (r0 + r1) / 2;
+  box(g, matKey, {
+    x: Math.cos(phi) * rc,
+    z: Math.sin(phi) * rc,
+    y0: 0,
+    w: thick,
+    h: len,
+    d: thick,
+    yc: (y0 + y1) / 2,
+    rotY: -phi,
+    rotZ: tilt,
+    stage,
+  });
+}
+
+/** Ceinture carrée de treillis (4 membrures horizontales) à l'altitude y0. */
+function eiffelBelt(g, matKey, { y0, half, thick, h, stage }) {
+  box(g, matKey, { x: 0, z: -half, y0, w: half * 2, h, d: thick, stage });
+  box(g, matKey, { x: 0, z: half, y0, w: half * 2, h, d: thick, stage });
+  box(g, matKey, { x: -half, z: 0, y0, w: thick, h, d: half * 2, stage });
+  box(g, matKey, { x: half, z: 0, y0, w: thick, h, d: half * 2, stage });
+}
+
+/**
+ * Le champ de points scintillants (après 2000) : un `InstancedMesh` de petits
+ * cubes émissifs plaqués sur les quatre faces de la tour. Les positions sont
+ * calculées une fois ici et gardées dans `userData.positions` ; c'est le layer
+ * qui les allume/éteint (nuit seulement) et les fait clignoter avec
+ * `state.time`. Marqué `sparkle` pour que `applyEntry` ne le traite pas comme
+ * une pièce de maçonnerie.
+ */
+function buildEiffelSparkle(g) {
+  const material = new THREE.MeshBasicMaterial({ color: 0xffe7a6 });
+  const mesh = new THREE.InstancedMesh(unitBox(), material, EIFFEL_SPARKLE_COUNT);
+  mesh.name = "eiffel_sparkle";
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  const positions = new Float32Array(EIFFEL_SPARKLE_COUNT * 3);
+  for (let i = 0; i < EIFFEL_SPARKLE_COUNT; i++) {
+    // Réparti sur la hauteur avec un biais vers le bas (la tour est plus large
+    // en bas : c'est là qu'il y a de la structure à éclairer).
+    const t = hash01(i, 11);
+    const y = 0.8 + Math.sqrt(t) * (EIFFEL_FLOOR3 - 0.8);
+    const half = eiffelHalfSpanAt(y);
+    const side = Math.floor(hash01(i, 22) * 4) % 4;
+    const u = (hash01(i, 33) - 0.5) * 1.9 * half;
+    let x;
+    let z;
+    if (side === 0) {
+      x = u;
+      z = -half;
+    } else if (side === 1) {
+      x = u;
+      z = half;
+    } else if (side === 2) {
+      x = -half;
+      z = u;
+    } else {
+      x = half;
+      z = u;
+    }
+    positions[i * 3] = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = z;
+  }
+  mesh.userData = {
+    sparkle: true,
+    fromYear: EIFFEL_SPARKLE_FROM_YEAR,
+    positions,
+    // Le contrat de pièce reste rempli (le layer et les tests le lisent) même
+    // si cette pièce ne pousse pas et n'a pas d'étage.
+    y0: 0,
+    h: 0.12,
+    sx: 1,
+    sz: 1,
+    anchor: "fixed",
+    stage: null,
+    temporary: false,
+    grow: false,
+  };
+  g.add(mesh);
+  return mesh;
+}
+
+/** La tour de fer, ses quatre quarts de chantier et son scintillement. */
+export function buildTourEiffel() {
+  const g = newModel("tourEiffel");
+  const S = EIFFEL_STAGES;
+  const rad = (half) => half * Math.SQRT2; // demi-portée -> rayon sur la diagonale
+  const PHIS = [Math.PI / 4, (3 * Math.PI) / 4, (5 * Math.PI) / 4, (7 * Math.PI) / 4];
+
+  // --- QUART 1 : les 4 piliers évasés + la grande arche -------------------
+  // Chaque pilier monte en 3 tronçons, dans 3 sous-fenêtres du quart : la tour
+  // sort du sol par le bas, pas d'un bloc.
+  const legCuts = [
+    { y0: 0, y1: 2.0, thick: 1.5, stage: [0.0, 0.09] },
+    { y0: 2.0, y1: 3.9, thick: 1.2, stage: [0.07, 0.17] },
+    { y0: 3.9, y1: EIFFEL_FLOOR1, thick: 0.95, stage: [0.14, 0.24] },
+  ];
+  for (const phi of PHIS) {
+    for (const c of legCuts) {
+      eiffelLeg(g, "iron", {
+        phi,
+        y0: c.y0,
+        y1: c.y1,
+        r0: rad(eiffelHalfSpanAt(c.y0)),
+        r1: rad(eiffelHalfSpanAt(c.y1)),
+        thick: c.thick,
+        stage: c.stage,
+      });
+    }
+  }
+  // La grande arche : quatre voûtes entre piliers voisins, sous le 1er étage,
+  // plus la frise horizontale qui les couronne. Même usage de `vault` que les
+  // arches du pont au Change (axe en travers => rotY sur les deux côtés).
+  const archHalf = eiffelHalfSpanAt(2.4);
+  for (let i = 0; i < 4; i++) {
+    const alongX = i < 2;
+    const sign = i % 2 === 0 ? -1 : 1;
+    vault(g, "ironDark", {
+      x: alongX ? 0 : sign * archHalf,
+      z: alongX ? sign * archHalf : 0,
+      y0: 2.4,
+      w: archHalf * 1.85,
+      h: 1.5,
+      d: 0.9,
+      rotY: alongX ? 0 : Math.PI / 2,
+      stage: [0.15, 0.25],
+    });
+  }
+  eiffelBelt(g, "ironDark", {
+    y0: 4.5,
+    half: eiffelHalfSpanAt(4.5),
+    thick: 0.5,
+    h: 0.45,
+    stage: [0.18, 0.25],
+  });
+
+  // --- QUART 2 : le 1er étage ---------------------------------------------
+  // Le plateau **déborde** franchement des piliers (8,4 contre ±3,5 pour les
+  // montants) : à la première capture, un plateau juste à l'aplomb des piliers
+  // ne se lisait pas du tout — la tour n'avait visiblement pas d'étages, juste
+  // un tronc qui s'affine. Le bandeau sombre en dessous (le garde-corps de la
+  // galerie) est ce qui fait vraiment apparaître le « plateau » vu de loin.
+  eiffelBelt(g, "ironDark", {
+    y0: EIFFEL_FLOOR1 - 0.35,
+    half: 4.3,
+    thick: 0.4,
+    h: 0.4,
+    stage: [0.25, 0.34],
+  });
+  box(g, "iron", {
+    x: 0,
+    z: 0,
+    y0: EIFFEL_FLOOR1,
+    w: 8.4,
+    h: 0.55,
+    d: 8.4,
+    stage: [0.26, 0.38],
+  });
+  eiffelBelt(g, "ironDark", {
+    y0: EIFFEL_FLOOR1 + 0.55,
+    half: 4.15,
+    thick: 0.18,
+    h: 0.4,
+    stage: [0.3, 0.42],
+  });
+  for (const phi of PHIS) {
+    for (const c of [
+      { y0: EIFFEL_FLOOR1, y1: 8.6, thick: 0.8, stage: [0.34, 0.44] },
+      { y0: 8.6, y1: EIFFEL_FLOOR2, thick: 0.65, stage: [0.4, 0.5] },
+    ]) {
+      eiffelLeg(g, "iron", {
+        phi,
+        y0: c.y0,
+        y1: c.y1,
+        r0: rad(eiffelHalfSpanAt(c.y0)),
+        r1: rad(eiffelHalfSpanAt(c.y1)),
+        thick: c.thick,
+        stage: c.stage,
+      });
+    }
+  }
+  eiffelBelt(g, "ironDark", {
+    y0: 8.6,
+    half: eiffelHalfSpanAt(8.6),
+    thick: 0.28,
+    h: 0.3,
+    stage: [0.42, 0.5],
+  });
+
+  // --- QUART 3 : le 2e étage ----------------------------------------------
+  eiffelBelt(g, "ironDark", {
+    y0: EIFFEL_FLOOR2 - 0.3,
+    half: 2.45,
+    thick: 0.34,
+    h: 0.35,
+    stage: [0.5, 0.58],
+  });
+  box(g, "iron", {
+    x: 0,
+    z: 0,
+    y0: EIFFEL_FLOOR2,
+    w: 4.8,
+    h: 0.5,
+    d: 4.8,
+    stage: [0.51, 0.62],
+  });
+  eiffelBelt(g, "ironDark", {
+    y0: EIFFEL_FLOOR2 + 0.5,
+    half: 2.35,
+    thick: 0.15,
+    h: 0.34,
+    stage: [0.56, 0.68],
+  });
+  // Amorce du fût au-dessus du 2e étage (le reste monte au quart suivant).
+  box(g, "iron", { x: 0, z: 0, y0: 11.92, w: 2.1, h: 1.9, d: 2.1, stage: [0.62, 0.75] });
+
+  // --- QUART 4 : le fût supérieur, le campanile, l'antenne ----------------
+  box(g, "iron", { x: 0, z: 0, y0: 13.82, w: 1.7, h: 5.4, d: 1.7, stage: [0.75, 0.84] });
+  box(g, "iron", { x: 0, z: 0, y0: 19.22, w: 1.15, h: 5.2, d: 1.15, stage: [0.8, 0.9] });
+  box(g, "iron", { x: 0, z: 0, y0: 24.42, w: 0.8, h: 3.18, d: 0.8, stage: [0.85, 0.94] });
+  // Les 4 membrures d'angle qui donnent la courbe concave du fût.
+  for (const phi of PHIS) {
+    eiffelLeg(g, "ironDark", {
+      phi,
+      y0: 11.92,
+      y1: EIFFEL_FLOOR3,
+      r0: rad(eiffelHalfSpanAt(11.92)),
+      r1: rad(eiffelHalfSpanAt(EIFFEL_FLOOR3)),
+      thick: 0.33,
+      stage: [0.77, 0.92],
+    });
+  }
+  // Le campanile du sommet, la coupole, l'antenne.
+  box(g, "iron", { x: 0, z: 0, y0: EIFFEL_FLOOR3, w: 1.5, h: 1.0, d: 1.5, stage: [0.9, 0.97] });
+  cone(g, "ironDark", { x: 0, z: 0, y0: 28.6, w: 1.3, h: 0.62, segs: 8, stage: [0.93, 0.99] });
+  cyl(g, goldMat(), {
+    x: 0,
+    z: 0,
+    y0: 29.22,
+    w: 0.16,
+    h: EIFFEL_TOP - 29.22,
+    d: 0.16,
+    segs: 6,
+    stage: [0.96, 1.0],
+  });
+
+  buildEiffelSparkle(g);
+  return g;
+}
+
+// ============================================================================
+// SACRÉ-CŒUR (1875-1914) — les dômes blancs au-dessus du quartier de Raphaël
+// ============================================================================
+
+/**
+ * Basilique du Sacré-Cœur : nef, porche à trois arches tourné vers Paris
+ * (+z, le sud), quatre coupoles secondaires, la grande coupole centrale
+ * (83 m) et le campanile derrière (84 m), monté en dernier — c'est
+ * historiquement juste (1904-1914) et cela donne au chantier de 39 ans une
+ * lecture progressive vue depuis la butte.
+ */
+export function buildSacreCoeur() {
+  const g = newModel("sacreCoeur");
+  const NAVE_H = 2.9;
+
+  // corps en croix
+  box(g, "travertine", { x: 0, z: 0, y0: 0, w: 5.0, h: NAVE_H, d: 3.6, stage: [0, 0.3] });
+  box(g, "travertine", { x: 0, z: 0, y0: 0, w: 3.4, h: NAVE_H, d: 5.0, stage: [0.05, 0.34] });
+  box(g, "travertineShadow", { x: 0, z: 0, y0: NAVE_H, w: 5.2, h: 0.28, d: 3.8, stage: [0.26, 0.38] });
+  box(g, "travertineShadow", { x: 0, z: 0, y0: NAVE_H, w: 3.6, h: 0.28, d: 5.2, stage: [0.26, 0.38] });
+
+  // porche à trois arches, face à Paris (+z)
+  box(g, "travertine", { x: 0, z: 3.3, y0: 0, w: 4.6, h: 1.9, d: 1.5, stage: [0.2, 0.45] });
+  for (const x of [-1.4, 0, 1.4]) {
+    vault(g, "travertineShadow", {
+      x,
+      z: 3.3,
+      y0: 0.9,
+      w: 1.05,
+      h: 0.6,
+      d: 1.6,
+      rotY: Math.PI / 2,
+      stage: [0.28, 0.48],
+    });
+  }
+  box(g, "travertineShadow", { x: 0, z: 3.3, y0: 1.9, w: 4.8, h: 0.26, d: 1.7, stage: [0.34, 0.5] });
+
+  // quatre coupoles secondaires aux angles
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      cyl(g, "travertine", {
+        x: sx * 1.85,
+        z: sz * 1.85,
+        y0: NAVE_H,
+        w: 1.5,
+        h: 0.7,
+        d: 1.5,
+        segs: 12,
+        stage: [0.4, 0.56],
+      });
+      dome(g, "travertine", {
+        x: sx * 1.85,
+        z: sz * 1.85,
+        y0: NAVE_H + 0.7,
+        w: 1.6,
+        h: 0.95,
+        segs: 12,
+        stage: [0.46, 0.6],
+      });
+    }
+  }
+
+  // tambour + LA grande coupole
+  cyl(g, "travertine", { x: 0, z: 0, y0: NAVE_H, w: 3.1, h: 1.9, d: 3.1, segs: 16, stage: [0.5, 0.68] });
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    cyl(g, "travertineShadow", {
+      x: Math.cos(a) * 1.62,
+      z: Math.sin(a) * 1.62,
+      y0: NAVE_H,
+      w: 0.26,
+      h: 1.9,
+      d: 0.26,
+      segs: 6,
+      stage: [0.54, 0.7],
+    });
+  }
+  box(g, "travertineShadow", { x: 0, z: 0, y0: 4.8, w: 3.5, h: 0.22, d: 3.5, stage: [0.62, 0.74] });
+  dome(g, "travertine", { x: 0, z: 0, y0: 5.02, w: 3.2, h: 2.35, segs: 16, stage: [0.66, 0.84] });
+  cyl(g, "travertine", { x: 0, z: 0, y0: 7.37, w: 0.85, h: 0.6, d: 0.85, segs: 12, stage: [0.8, 0.9] });
+  dome(g, "travertine", { x: 0, z: 0, y0: 7.97, w: 0.8, h: 0.35, segs: 12, stage: [0.84, 0.93] });
+  // la croix du sommet (83 m)
+  box(g, goldMat(), { x: 0, z: 0, y0: 8.32, w: 0.1, h: 0.5, d: 0.1, stage: [0.88, 0.96] });
+
+  // le campanile, monté en dernier (1904-1914)
+  box(g, "travertine", { x: 0, z: -4.2, y0: 0, w: 1.7, h: 6.6, d: 1.7, stage: [0.82, 0.97] });
+  box(g, "travertineShadow", { x: 0, z: -4.2, y0: 6.6, w: 1.95, h: 0.3, d: 1.95, stage: [0.9, 0.99] });
+  dome(g, "travertine", { x: 0, z: -4.2, y0: 6.9, w: 1.6, h: 1.1, segs: 12, stage: [0.92, 1.0] });
+  cone(g, goldMat(), { x: 0, z: -4.2, y0: 8.0, w: 0.16, h: 0.4, segs: 6, stage: [0.96, 1.0] });
+  return g;
+}
+
+// ============================================================================
+// OPÉRA GARNIER (1861-1875) — toitures de cuivre vert et accents dorés
+// ============================================================================
+
+/**
+ * L'Opéra : le grand vestibule à colonnes face au boulevard (+z, le sud), la
+ * coupole plate de la salle au centre, la cage de scène (le plus haut volume,
+ * en arrière) et sa toiture en pavillon triangulaire. 173 × 125 m réels, soit
+ * ~9 × 6 unités : l'un des plus gros volumes de la scène.
+ */
+export function buildOperaGarnier() {
+  const g = newModel("operaGarnier");
+  const H = 2.7;
+  // masse principale
+  box(g, "operaStone", { x: 0, z: 0, y0: 0, w: 8.6, h: H, d: 5.4, stage: [0, 0.34] });
+  box(g, "copper", { x: 0, z: 0, y0: H, w: 8.7, h: 0.4, d: 5.5, stage: [0.3, 0.45] });
+
+  // façade sud : soubassement à arcades, colonnade, attique
+  box(g, "operaStone", { x: 0, z: 3.1, y0: 0, w: 7.4, h: 1.5, d: 1.3, stage: [0.18, 0.42] });
+  for (let i = 0; i < 7; i++) {
+    const x = -2.7 + i * 0.9;
+    cyl(g, "operaStone", {
+      x,
+      z: 3.45,
+      y0: 1.5,
+      w: 0.4,
+      h: 1.35,
+      d: 0.4,
+      segs: 8,
+      stage: [0.34, 0.56],
+    });
+  }
+  box(g, "operaStone", { x: 0, z: 3.2, y0: 2.85, w: 7.6, h: 0.75, d: 1.5, stage: [0.46, 0.64] });
+  // les groupes dorés de l'attique (Poésie et Harmonie) + la lyre
+  for (const x of [-3.1, 3.1]) {
+    cyl(g, goldMat(), { x, z: 3.2, y0: 3.6, w: 0.42, h: 0.75, d: 0.42, segs: 8, stage: [0.6, 0.74] });
+  }
+  box(g, goldMat(), { x: 0, z: 3.2, y0: 3.6, w: 1.1, h: 0.22, d: 0.3, stage: [0.62, 0.76] });
+
+  // coupole plate de la salle (cuivre vert)
+  cyl(g, "operaStone", { x: 0, z: 0.2, y0: H + 0.4, w: 3.4, h: 0.55, d: 3.4, segs: 16, stage: [0.5, 0.68] });
+  dome(g, "copper", { x: 0, z: 0.2, y0: H + 0.95, w: 3.5, h: 1.05, segs: 16, stage: [0.62, 0.8] });
+  cyl(g, goldMat(), { x: 0, z: 0.2, y0: H + 2.0, w: 0.5, h: 0.35, d: 0.5, segs: 8, stage: [0.74, 0.86] });
+
+  // cage de scène (le plus haut) + son toit à deux pentes, en arrière (-z)
+  box(g, "operaStone", { x: 0, z: -2.5, y0: 0, w: 5.2, h: 4.3, d: 3.4, stage: [0.6, 0.84] });
+  gable(g, "copper", { x: 0, z: -2.5, y0: 4.3, w: 5.2, h: 1.15, d: 3.4, stage: [0.72, 0.92] });
+  box(g, goldMat(), { x: 0, z: -2.5, y0: 5.45, w: 0.7, h: 0.3, d: 0.7, stage: [0.86, 1.0] });
+  // pavillons latéraux de l'Empereur et des abonnés
+  for (const sx of [-1, 1]) {
+    box(g, "operaStone", { x: sx * 4.5, z: -0.6, y0: 0, w: 1.4, h: 2.2, d: 3.0, stage: [0.4, 0.7] });
+    gable(g, "copper", {
+      x: sx * 4.5,
+      z: -0.6,
+      y0: 2.2,
+      w: 3.0,
+      h: 0.6,
+      d: 1.4,
+      rotY: Math.PI / 2,
+      stage: [0.55, 0.8],
+    });
+  }
+  return g;
+}
+
+// ============================================================================
+// TOUR MONTPARNASSE (1969-1973) — la dalle noire
+// ============================================================================
+
+/** 210 m (21 unités), 50 × 36 m d'emprise : la vraie cote, sans exagération. */
+export function buildTourMontparnasse() {
+  const g = newModel("tourMontparnasse");
+  const H = 21.0;
+  // socle + esplanade
+  cyl(g, "stoneShadow", { x: 0, z: 0, y0: 0, w: 9.5, h: 0.14, d: 8.0, segs: 12, stage: [0, 0.2] });
+  box(g, "darkGlassLight", { x: 0, z: 0, y0: 0.14, w: 7.0, h: 0.7, d: 6.2, stage: [0.05, 0.3] });
+  // le fût : une dalle aux petits côtés arrondis (deux demi-cylindres + un
+  // corps rectangulaire), qui monte tout du long du chantier.
+  box(g, "darkGlass", { x: 0, z: 0, y0: 0.84, w: 5.0, h: H, d: 3.6, stage: [0.1, 0.94] });
+  for (const sx of [-1, 1]) {
+    cyl(g, "darkGlass", {
+      x: sx * 2.5,
+      z: 0,
+      y0: 0.84,
+      w: 3.6,
+      h: H,
+      d: 3.6,
+      segs: 12,
+      stage: [0.12, 0.96],
+    });
+  }
+  // nervures verticales claires (les meneaux, qui rendent la dalle lisible)
+  for (const x of [-1.6, 0, 1.6]) {
+    box(g, "darkGlassLight", {
+      x,
+      z: 1.82,
+      y0: 0.84,
+      w: 0.3,
+      h: H,
+      d: 0.1,
+      stage: [0.2, 0.96],
+    });
+    box(g, "darkGlassLight", {
+      x,
+      z: -1.82,
+      y0: 0.84,
+      w: 0.3,
+      h: H,
+      d: 0.1,
+      stage: [0.2, 0.96],
+    });
+  }
+  // terrasse et locaux techniques
+  box(g, "darkGlassLight", { x: 0, z: 0, y0: H + 0.84, w: 5.4, h: 0.35, d: 4.0, stage: [0.9, 1.0] });
+  box(g, "metal", { x: 0.8, z: 0, y0: H + 1.19, w: 1.6, h: 0.5, d: 1.6, stage: [0.94, 1.0] });
+  return g;
+}
+
+// ============================================================================
+// LA DÉFENSE (1970-2014) — un cluster de 8 tours qui pousse l'une après l'autre
+// ============================================================================
+//
+// Un seul état, mais 8 fenêtres d'étage : la tour n° i monte pendant
+// [i·0,115 ; i·0,115+0,09] de la présence, soit — avec `born: 1970,
+// buildYears: 44` — de 1970 à ~2010, une tour tous les cinq ans. C'est
+// exactement le mécanisme des tours de Notre-Dame, appliqué à un quartier
+// entier : aucun code de layer supplémentaire.
+
+/** Les 8 tours du cluster, en coordonnées locales du site (axe local +X = vers Paris). */
+export const DEFENSE_TOWERS = [
+  { x: 1.5, z: -6.0, w: 2.6, d: 2.6, h: 8.5, mat: "towerGlassA" },
+  { x: 2.0, z: 5.4, w: 2.2, d: 3.0, h: 10.5, mat: "towerGlassB" },
+  { x: 7.0, z: -2.0, w: 3.0, d: 3.0, h: 13.0, mat: "towerGlassC" },
+  { x: 6.4, z: 7.6, w: 2.4, d: 2.4, h: 9.5, mat: "towerGlassA" },
+  { x: -3.5, z: 8.2, w: 2.8, d: 2.2, h: 11.5, mat: "towerGlassB" },
+  { x: -4.0, z: -8.0, w: 2.4, d: 2.8, h: 15.0, mat: "towerGlassC" },
+  { x: 10.5, z: 3.2, w: 2.6, d: 2.6, h: 17.5, mat: "towerGlassB" },
+  { x: 9.0, z: -8.2, w: 3.2, d: 2.4, h: 20.0, mat: "towerGlassA" },
+];
+
+/** Fenêtre d'étage de la tour n° i (exportée pour le test). */
+export function defenseTowerStage(i) {
+  const a = i * 0.115;
+  return [a, Math.min(1, a + 0.09)];
+}
+
+export function buildLaDefense() {
+  const g = newModel("laDefense");
+  DEFENSE_TOWERS.forEach((t, i) => {
+    const stage = defenseTowerStage(i);
+    box(g, t.mat, { x: t.x, z: t.z, y0: 0, w: t.w, h: t.h, d: t.d, stage });
+    // couronnement technique + une nervure claire, pour que les 8 dalles ne
+    // lisent pas comme 8 boîtes identiques
+    box(g, "metal", {
+      x: t.x,
+      z: t.z,
+      y0: t.h,
+      w: t.w * 0.55,
+      h: 0.4,
+      d: t.d * 0.55,
+      stage: [Math.min(0.99, stage[1] - 0.01), Math.min(1, stage[1] + 0.02)],
+    });
+    box(g, "darkGlassLight", {
+      x: t.x,
+      z: t.z + t.d / 2,
+      y0: 0,
+      w: t.w * 0.2,
+      h: t.h,
+      d: 0.08,
+      stage,
+    });
+  });
+  // la dalle piétonne qui porte le quartier
+  box(g, "stoneShadow", { x: 3.0, z: 0, y0: 0, w: 20.0, h: 0.2, d: 20.0, stage: [0, 0.06] });
+  return g;
+}
+
+/**
+ * La Grande Arche (1985-1989) : un cube creux de 110 m. Quatre dalles de
+ * marbre (deux jambages, un toit, un socle) laissant le jour passer au milieu
+ * — l'ouverture est dans l'axe local +X, donc dans l'axe historique
+ * Louvre-Concorde-Étoile-Défense (voir le `rotY` du site).
+ */
+export function buildGrandeArche() {
+  const g = newModel("grandeArche");
+  const SIDE = 11.0;
+  const LEG = 2.1; // épaisseur des jambages
+  const CX = -9.0;
+  // jambages
+  for (const sz of [-1, 1]) {
+    box(g, "concrete", {
+      x: CX,
+      z: (sz * (SIDE - LEG)) / 2,
+      y0: 0,
+      w: LEG * 1.1,
+      h: SIDE,
+      d: LEG,
+      stage: [0, 0.6],
+    });
+  }
+  // socle et couronnement (le toit du cube)
+  box(g, "concrete", { x: CX, z: 0, y0: 0, w: LEG * 1.1, h: 0.9, d: SIDE, stage: [0, 0.35] });
+  box(g, "concrete", { x: CX, z: 0, y0: SIDE - 1.5, w: LEG * 1.1, h: 1.5, d: SIDE, stage: [0.6, 0.9] });
+  // le « nuage » de toile tendu sous l'arche + les ascenseurs
+  box(g, "metal", { x: CX, z: 0, y0: 3.6, w: 1.4, h: 0.18, d: 5.4, stage: [0.85, 1.0] });
+  box(g, "darkGlassLight", { x: CX + 0.9, z: 0, y0: 0.9, w: 0.5, h: 8.4, d: 1.2, stage: [0.75, 1.0] });
+  return g;
+}
+
+// ============================================================================
 // Table des constructeurs — la clé `model` du registre de monuments.js
 // ============================================================================
 
@@ -1196,4 +1845,11 @@ export const MODEL_BUILDERS = {
   sainteChapelle: buildSainteChapelle,
   pantheon: buildPantheon,
   invalides: buildInvalides,
+  // --- tâche 11 -----------------------------------------------------------
+  tourEiffel: buildTourEiffel,
+  sacreCoeur: buildSacreCoeur,
+  operaGarnier: buildOperaGarnier,
+  tourMontparnasse: buildTourMontparnasse,
+  laDefense: buildLaDefense,
+  grandeArche: buildGrandeArche,
 };

@@ -49,6 +49,7 @@ import {
   LANDMARKS,
   ISLANDS,
   insideMonumentFootprint,
+  insideRailCorridor,
 } from "../geography.js";
 import { lerp, smoothstep, lifecycle, easeOutBack } from "../timeEngine.js";
 import { YEAR_MIN, YEAR_MAX } from "../timeline.js";
@@ -699,7 +700,10 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
     // il se creuse juste un vide là où se dresse le monument. Indispensable sur
     // l'île de la Cité, dont les 4 cellules doivent rester constructibles pour
     // les huttes de -250 (voir LANDMARK_CLEARANCE.notreDame).
-    if (insideMonumentFootprint(wx, wz)) continue;
+    // ... et, même logique, le couloir des deux anneaux de transport de la
+    // tâche 11 : la petite ceinture et le périphérique passent *sur* ces deux
+    // ellipses, on ne bâtit donc pas dessus (voir `insideRailCorridor`).
+    if (insideMonumentFootprint(wx, wz) || insideRailCorridor(wx, wz)) continue;
 
     out.push({
       x: wx,

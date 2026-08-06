@@ -4,6 +4,7 @@ import * as terrain from "./layers/terrain.js";
 import * as buildings from "./layers/buildings.js";
 import * as walls from "./layers/walls.js";
 import * as monuments from "./layers/monuments.js";
+import * as rails from "./layers/rails.js";
 import { createControls } from "./controls.js";
 import * as ui from "./ui.js";
 
@@ -48,7 +49,10 @@ const ctx = { scene, renderer, camera, quality };
 // init() (which builds that mesh) must have already run.
 // monuments après walls : ils lisent groundHeightAt (terrain) et occupent des
 // emplacements que buildings tient déjà libres (MONUMENT_FOOTPRINTS).
-const layers = [terrain, buildings, walls, monuments];
+// rails après monuments : même dépendance au terrain (groundHeightAt), et
+// leurs couloirs (geography.insideRailCorridor) sont déjà pris en compte par
+// buildings.js à sa génération.
+const layers = [terrain, buildings, walls, monuments, rails];
 for (const layer of layers) {
   layer.init(ctx);
 }
@@ -137,6 +141,7 @@ function setYear(year) {
   buildings.rebuildForYear(state.year);
   walls.forceRescan(state.year);
   monuments.forceRescan(state.year);
+  rails.forceRescan(state.year);
   ui.update(0, state);
   renderer.render(scene, camera);
 }
@@ -155,6 +160,15 @@ window.__paris = {
   wallCounts: (year) => walls.debugCounts(year ?? state.year),
   monumentCounts: (year) => monuments.debugCounts(year ?? state.year),
   monumentStats: () => monuments.stats(),
+  railCounts: (year) => rails.debugCounts(year ?? state.year),
+  railStats: () => rails.stats(),
+  // Même rôle que le bouton météo de l'UI, en un appel : la vérification
+  // automatisée en a besoin pour capturer la nuit (scintillement de la tour
+  // Eiffel, phares du périphérique). La tâche 14 traitera l'éclairage lui-même.
+  setWeather: (weather) => {
+    state.weather = weather;
+    ui.update(0, state);
+  },
   renderer,
   scene,
 };

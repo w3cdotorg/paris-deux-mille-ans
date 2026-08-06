@@ -45,6 +45,7 @@
  * reconstruit les matrices d'année que quand `state.year` change.
  */
 
+import * as THREE from "three";
 import { LANDMARKS, MONUMENT_FOOTPRINTS } from "../geography.js";
 import { lifecycle, easeOutBack } from "../timeEngine.js";
 import { groundHeightAt } from "./terrain.js";
@@ -340,6 +341,117 @@ export const MONUMENTS = [
       },
     ],
   },
+  // ==========================================================================
+  // Tâche 11 — le fer, le verre et le béton
+  // ==========================================================================
+  {
+    id: "tourEiffel",
+    label: "La tour Eiffel",
+    phrase:
+      "Elle est montée étage par étage en deux ans : d'abord les quatre grands pieds, puis le premier étage, puis le deuxième, et la pointe tout en haut. 300 mètres : c'est la plus haute de tout Paris !",
+    x: L.tourEiffel.x,
+    z: L.tourEiffel.z,
+    states: [
+      {
+        id: "tour",
+        slot: "main",
+        model: "tourEiffel",
+        born: 1887,
+        buildYears: 2.3,
+        label: "La tour Eiffel",
+        phrase:
+          "Regarde-la pousser : les quatre pieds en biais, la grande arche, le premier étage, le deuxième, et enfin la flèche. Le soir, elle scintille.",
+      },
+    ],
+  },
+  {
+    id: "sacreCoeur",
+    label: "Le Sacré-Cœur",
+    phrase:
+      "La grande église blanche tout en haut de la butte Montmartre, juste au-dessus de chez nous. Elle a mis presque quarante ans à être construite : son clocher est arrivé en dernier.",
+    x: L.sacreCoeur.x,
+    z: L.sacreCoeur.z,
+    states: [
+      {
+        id: "basilique",
+        slot: "main",
+        model: "sacreCoeur",
+        born: 1875,
+        buildYears: 39,
+        label: "La basilique du Sacré-Cœur",
+        phrase: "Ses coupoles blanches se voient de très loin, parce qu'elle est posée sur la plus haute colline.",
+      },
+    ],
+  },
+  {
+    id: "operaGarnier",
+    label: "L'Opéra Garnier",
+    phrase:
+      "Le palais de la musique et de la danse : son toit est en cuivre devenu vert avec le temps, et il est décoré de statues dorées.",
+    x: L.operaGarnier.x,
+    z: L.operaGarnier.z,
+    states: [
+      {
+        id: "opera",
+        slot: "main",
+        model: "operaGarnier",
+        born: 1861,
+        buildYears: 14,
+        label: "L'Opéra Garnier",
+        phrase: "Devant, un grand escalier et des colonnes ; derrière, la très haute cage où l'on range les décors.",
+      },
+    ],
+  },
+  {
+    id: "tourMontparnasse",
+    label: "La tour Montparnasse",
+    phrase: "Une immense tour noire toute seule au milieu des toits gris : on la voit de partout dans Paris.",
+    x: L.tourMontparnasse.x,
+    z: L.tourMontparnasse.z,
+    states: [
+      {
+        id: "tour",
+        slot: "main",
+        model: "tourMontparnasse",
+        born: 1969,
+        buildYears: 4,
+        label: "La tour Montparnasse",
+        phrase: "210 mètres de verre foncé, construits en quatre ans. Depuis le toit, on voit la tour Eiffel en entier.",
+      },
+    ],
+  },
+  {
+    id: "laDefense",
+    label: "La Défense",
+    phrase:
+      "Tout à l'ouest, un quartier de gratte-ciel qui a poussé une tour après l'autre, et un cube géant tout blanc avec un trou au milieu : la Grande Arche.",
+    x: L.laDefense.x,
+    z: L.laDefense.z,
+    // L'axe historique Louvre → Concorde → Étoile → La Défense : l'axe local +X
+    // du site pointe vers Paris, donc rotY = -atan2(dz, dx) avec
+    // (dx, dz) = (0 - x, 0 - z) — voir la note de `eiffelLeg` sur le signe.
+    rotY: -Math.atan2(-L.laDefense.z, -L.laDefense.x),
+    states: [
+      {
+        id: "tours",
+        slot: "tours",
+        model: "laDefense",
+        born: 1970,
+        buildYears: 44,
+        label: "Les tours de La Défense",
+        phrase: "Huit tours de verre, construites l'une après l'autre pendant quarante ans, une tous les cinq ans.",
+      },
+      {
+        id: "arche",
+        slot: "arche",
+        model: "grandeArche",
+        born: 1985,
+        buildYears: 4,
+        label: "La Grande Arche",
+        phrase: "Un cube de marbre blanc si grand que la cathédrale Notre-Dame tiendrait debout dans son trou.",
+      },
+    ],
+  },
 ];
 
 // ============================================================================
@@ -405,7 +517,30 @@ const SPIN_AXES = { x: "x", y: "y", z: "z" };
 let entries = [];
 /** Sous-groupes animés visibles (grues, roues) — liste stable, sans allocation. */
 let spinners = [];
+/** Champs de points scintillants (tour Eiffel la nuit) — liste stable. */
+let sparkles = [];
 let lastAppliedYear = null;
+
+// Scratch réutilisé pour l'écriture des matrices d'instances (aucune allocation
+// par frame — même discipline que walls.js/buildings.js).
+const _m = new THREE.Matrix4();
+const _p = new THREE.Vector3();
+const _q = new THREE.Quaternion();
+const _s = new THREE.Vector3();
+const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
+
+/** Le scintillement est réécrit 12 fois par seconde, pas 60 : l'oeil ne voit
+ * pas la différence sur des points de 1 m, et cela divise le coût par 5. */
+const SPARKLE_PERIOD = 1 / 12;
+
+/** Hash déterministe local (phase de clignotement par point). */
+function hash01(a, b) {
+  let h = (a * 374761393 + b * 668265263) | 0;
+  h = (h ^ (h >>> 13)) | 0;
+  h = Math.imul(h, 1274126177);
+  h = (h ^ (h >>> 16)) | 0;
+  return (h >>> 0) / 4294967296;
+}
 
 function clamp01(v) {
   return v < 0 ? 0 : v > 1 ? 1 : v;
@@ -463,6 +598,9 @@ function applyEntry(entry, presence, phase) {
 
   for (const child of group.children) {
     const ud = child.userData;
+    // Le champ scintillant n'est pas de la maçonnerie : ni pousse, ni étage.
+    // C'est `update` qui l'allume, et seulement la nuit (voir `sparkles`).
+    if (ud.sparkle) continue;
     if (ud.spin) {
       // Grues/roues : visibles seulement dans leur fenêtre de chantier.
       const on = !ud.stage || (presence >= ud.stage[0] && presence <= ud.stage[1]);
@@ -491,11 +629,53 @@ function applyEntry(entry, presence, phase) {
   }
 }
 
+/**
+ * Écrit les 80 matrices d'un champ scintillant. Un point est « allumé » quand
+ * son clignotement (sinusoïde de phase propre) passe au-dessus d'un seuil ;
+ * éteint, il reçoit une échelle nulle — jamais de changement de `count`.
+ * @param {object} s - entrée de `sparkles`
+ * @param {number} time - `state.time`, ou 0 pour une pose figée (reducedMotion)
+ * @param {boolean} twinkle
+ */
+function writeSparkle(s, time, twinkle) {
+  const { mesh, positions, count } = s;
+  _q.identity();
+  for (let i = 0; i < count; i++) {
+    const phase = hash01(i, 97) * Math.PI * 2;
+    // Deux fréquences légèrement décalées : le scintillement ne « pulse » pas
+    // en bloc, il pétille (c'est ce que fait le vrai éclairage à la seconde).
+    const wave = twinkle ? Math.sin(time * 6.5 + phase) * 0.6 + Math.sin(time * 2.3 + phase * 1.7) * 0.4 : 0.6;
+    if (wave < 0.12) {
+      mesh.setMatrixAt(i, _zero);
+      continue;
+    }
+    // 1,6 à 3 m de côté : très au-dessus de la taille d'une vraie ampoule, mais
+    // un point de 0,08 unité était invisible dès qu'on reculait un peu (constat
+    // de la capture task11-eiffel-nuit).
+    const size = 0.16 + wave * 0.14;
+    _p.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+    _s.set(size, size, size);
+    _m.compose(_p, _q, _s);
+    mesh.setMatrixAt(i, _m);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+}
+
 /** Réévalue tous les monuments pour `year`. */
 function rescanAll(year) {
   for (const entry of entries) {
     const { phase, presence } = lifecycle(year, entry.state);
     applyEntry(entry, presence, phase);
+  }
+  // Le scintillement n'a de sens que sur un monument *achevé* et après son
+  // année d'allumage (la tour Eiffel n'a scintillé qu'à partir de 2000).
+  for (const s of sparkles) {
+    const { presence } = lifecycle(year, s.entry.state);
+    s.ready = s.entry.group.visible && presence > 0.999 && year >= s.fromYear;
+    if (!s.ready) {
+      s.mesh.visible = false;
+      s.written = false;
+    }
   }
   // Recalcule la liste des animés effectivement visibles (une fois par
   // changement d'année, jamais par frame).
@@ -539,6 +719,7 @@ function siteBaseY(m) {
 export function init(ctx) {
   entries = [];
   spinners = [];
+  sparkles = [];
   for (const m of MONUMENTS) {
     for (const st of m.states) {
       const build = MODEL_BUILDERS[st.model];
@@ -564,14 +745,32 @@ export function init(ctx) {
       const deathPresence =
         st.died === undefined ? 1 : clamp01((st.died - st.born) / (buildYears || 1));
 
-      entries.push({
+      const entry = {
         monument: m,
         state: st,
         group,
         baseY,
         buriedDepth: Math.max(top, 1),
         deathPresence,
-      });
+      };
+      entries.push(entry);
+
+      // Champs scintillants portés par ce modèle (tour Eiffel après 2000).
+      for (const child of group.children) {
+        const ud = child.userData;
+        if (!ud.sparkle) continue;
+        child.visible = false;
+        sparkles.push({
+          entry,
+          mesh: child,
+          positions: ud.positions,
+          count: child.count,
+          fromYear: ud.fromYear,
+          ready: false,
+          written: false,
+          lastWrite: -Infinity,
+        });
+      }
     }
   }
   lastAppliedYear = null;
@@ -592,6 +791,30 @@ export function update(dt, state) {
     const angle = state.reducedMotion ? phase : phase + state.time * speed;
     s.rotation[SPIN_AXES[axis] ?? "y"] = angle;
   }
+
+  // Scintillement de la tour Eiffel : uniquement la nuit, uniquement après
+  // l'année d'allumage, réécrit 12 fois par seconde. Sous `reducedMotion`, les
+  // points sont allumés une fois pour toutes, sans clignotement.
+  // (La tâche 14 affinera la nuit ; ici on lit simplement `state.weather`.)
+  const night = state.weather === "night";
+  for (const s of sparkles) {
+    if (!s.ready || !night) {
+      if (s.mesh.visible) s.mesh.visible = false;
+      continue;
+    }
+    s.mesh.visible = true;
+    if (state.reducedMotion) {
+      if (!s.written) {
+        writeSparkle(s, 0, false);
+        s.written = true;
+      }
+      continue;
+    }
+    if (state.time - s.lastWrite < SPARKLE_PERIOD) continue;
+    s.lastWrite = state.time;
+    s.written = false;
+    writeSparkle(s, state.time, true);
+  }
 }
 
 /** Même contrat que walls.forceRescan / terrain.forceRescan (window.__paris.setYear). */
@@ -606,7 +829,14 @@ export function forceRescan(year) {
  * @param {number} year
  */
 export function debugCounts(year) {
-  const out = { states: {}, visibleMeshes: 0, spinners: spinners.length };
+  const out = {
+    states: {},
+    visibleMeshes: 0,
+    spinners: spinners.length,
+    // Champs scintillants prêts à s'allumer (il faut encore la nuit).
+    sparkleFieldsReady: sparkles.filter((s) => s.ready).length,
+    sparkleFieldsLit: sparkles.filter((s) => s.mesh.visible).length,
+  };
   for (const entry of entries) {
     const { phase, presence } = lifecycle(year, entry.state);
     let visibleParts = 0;

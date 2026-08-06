@@ -110,6 +110,9 @@ export const LANDMARKS = {
   // deux monuments collés, seule la flèche dorée dépassant du toit voisin.
   sainteChapelle: { x: -9.2, z: -0.6 },
   invalides: { x: -230, z: -20 },
+  // --- sites de monuments ajoutés par la tâche 11 --------------------------
+  operaGarnier: { x: -135, z: -135 },
+  tourMontparnasse: { x: -120, z: 95 },
   // Pont au Change : calé pour franchir *réellement* le ruban de Seine rendu
   // par terrain.js (demi-largeur 7 autour de l'axe, voir buildRiverGeometry).
   // L'axe passe par (0,0) puis (-40,-15) : la normale « vers le nord » vaut
@@ -149,6 +152,19 @@ export const MONUMENT_FOOTPRINTS = [
   { id: "forum", x: -30.2, z: 55, r: 5.6 },
   { id: "pantheon", x: -26, z: 76.9, r: 5.5 },
   { id: "invalides", x: -230, z: -21, r: 8.0 },
+  // --- tâche 11 : les grands monuments de fer, de verre et de béton --------
+  // Rayons calibrés par le test « emprises : couvrent réellement l'étendue des
+  // modèles du site, sans excès » (test/monuments.test.js) — il refait le
+  // calcul depuis les modèles et échoue si l'un de ces disques dérive.
+  { id: "tourEiffel", x: -406, z: -60, r: 9.6 },
+  { id: "sacreCoeur", x: -50, z: -375.4, r: 5.7 },
+  { id: "operaGarnier", x: -135, z: -135.1, r: 6.7 },
+  { id: "tourMontparnasse", x: -120, z: 95, r: 6.3 },
+  // La Défense est le seul site tourné (`rotY`, l'axe historique) : son disque
+  // est donc centré *exactement* sur l'ancre du site, seule position invariante
+  // par rotation — un disque calé sur la boîte englobante locale se décalerait
+  // dès que le quartier pivote.
+  { id: "laDefense", x: -834, z: -433, r: 17.0 },
 ];
 
 /**
@@ -181,6 +197,88 @@ export const RINGS = {
   peripherique: { cx: -140, cz: -80, rx: 575, rz: 430 },
   petiteCeinture: { cx: -140, cz: -80, rx: 545, rz: 415 },
 };
+
+// ============================================================================
+// Couloirs de transport — les deux anneaux ne peuvent pas traverser des maisons
+// ============================================================================
+//
+// La petite ceinture (rails, 1852) et le périphérique (1958) sont rendus par
+// `layers/rails.js` *sur* ces deux ellipses, à travers un tissu urbain que
+// `buildings.js` a déjà densifié jusqu'au bord du périphérique. Sans
+// dégagement, les rails et le ruban d'asphalte passeraient au milieu des
+// façades. Ces deux couloirs sont donc la source unique partagée : `rails.js`
+// y pose ses ouvrages, `buildings.js` refuse d'y placer un bâtiment.
+//
+// Volontairement **indépendants de l'année** (comme `MONUMENT_FOOTPRINTS`) :
+// `placeCell` n'est appelé qu'une fois, à l'init, pour toute la frise. Ce n'est
+// pas un compromis mais la réalité historique — la trouée de la petite
+// ceinture n'a jamais été rebâtie, et le couloir du périphérique est l'ancienne
+// zone non aedificandi des fortifications de Thiers (1841), qui occupe la même
+// ellipse depuis. Avant 1840, ces deux anneaux traversent de toute façon des
+// champs (cf. `urbanYear` : la ceinture des faubourgs ne s'urbanise qu'entre
+// 1750 et 1900), donc aucun vide n'est visible dans le Paris ancien.
+
+/** Demi-largeur du couloir de la petite ceinture (remblai + double voie). */
+export const PETITE_CEINTURE_HALF_WIDTH = 1.5;
+/** Demi-largeur du couloir du périphérique (deux chaussées + terre-plein). */
+export const PERIPHERIQUE_HALF_WIDTH = 3.4;
+
+/**
+ * Le viaduc de Barbès (métro aérien, 1903) : même problème, en ligne droite. Le
+ * tracé vit ici parce que `buildings.js` doit dégager son couloir *avant* que
+ * `rails.js` n'existe (les bâtiments sont placés une fois pour toute la frise),
+ * et parce que geography.js est le module de conventions partagées : `rails.js`
+ * lit ces deux points pour poser ses piliers.
+ */
+export const VIADUC_AXIS = {
+  a: { x: -20, z: -338 },
+  b: { x: 120, z: -348 },
+  halfWidth: 1.6,
+};
+
+/** Distance de (x, z) au segment [a, b]. */
+function distanceToSegment(x, z, a, b) {
+  const abx = b.x - a.x;
+  const abz = b.z - a.z;
+  const len2 = abx * abx + abz * abz;
+  const t = len2 === 0 ? 0 : clamp(((x - a.x) * abx + (z - a.z) * abz) / len2, 0, 1);
+  return distance(x, z, a.x + abx * t, a.z + abz * t);
+}
+
+/**
+ * Distance approchée de (x, z) à une ellipse, mesurée **le long du rayon**
+ * passant par le point. Exacte sur les deux axes, légèrement sur-estimée
+ * ailleurs (elle majore la distance perpendiculaire), donc un couloir calculé
+ * avec elle n'est jamais plus large que demandé. Suffisant ici : nos deux
+ * ellipses sont peu excentriques (575/430 et 545/415).
+ * @param {number} x
+ * @param {number} z
+ * @param {{cx:number, cz:number, rx:number, rz:number}} ring
+ * @returns {number} distance en unités (0 = sur l'ellipse)
+ */
+export function distanceToRing(x, z, ring) {
+  const dx = x - ring.cx;
+  const dz = z - ring.cz;
+  const k = Math.sqrt((dx / ring.rx) * (dx / ring.rx) + (dz / ring.rz) * (dz / ring.rz));
+  if (k === 0) return Math.min(ring.rx, ring.rz);
+  const radial = Math.hypot(dx, dz);
+  return Math.abs(k - 1) * (radial / k);
+}
+
+/**
+ * Le point (x, z) tombe-t-il dans le couloir de la petite ceinture ou du
+ * périphérique ? Consommé par `buildings.js` (un bâtiment par un) et par
+ * `rails.js` (qui, lui, y pose ses ouvrages).
+ * @param {number} x
+ * @param {number} z
+ * @returns {boolean}
+ */
+export function insideRailCorridor(x, z) {
+  if (distanceToRing(x, z, RINGS.petiteCeinture) < PETITE_CEINTURE_HALF_WIDTH) return true;
+  if (distanceToRing(x, z, RINGS.peripherique) < PERIPHERIQUE_HALF_WIDTH) return true;
+  if (distanceToSegment(x, z, VIADUC_AXIS.a, VIADUC_AXIS.b) < VIADUC_AXIS.halfWidth) return true;
+  return false;
+}
 
 // ============================================================================
 // SEINE_POINTS — river meander control points
