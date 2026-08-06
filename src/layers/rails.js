@@ -673,6 +673,10 @@ function updateTrains(state, active) {
 const smoke = { slots: [], lastSpawn: [] };
 
 function buildSmoke(ctx) {
+  // Le pool est remis à zéro : `init` est appelé une fois dans l'application,
+  // mais plusieurs fois dans les tests (une scène neuve par cas), et sans ce
+  // reset les bouffées s'accumuleraient d'une init à l'autre.
+  smoke.slots.length = 0;
   const geo = new THREE.IcosahedronGeometry(0.4, 0);
   for (let i = 0; i < SMOKE_POOL_SIZE; i++) {
     const material = new THREE.MeshBasicMaterial({
