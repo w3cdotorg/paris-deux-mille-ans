@@ -19,15 +19,23 @@ import {
 } from "../src/layers/ghosts.js";
 import { lifecycle } from "../src/timeEngine.js";
 import { LANDMARKS } from "../src/geography.js";
+import { MONUMENTS } from "../src/layers/monuments.js";
 
 // ============================================================================
 // Configuration : le fantôme s'accorde avec la vraie tour de monuments.js
 // ============================================================================
 
 test("configuration : le fantôme mime le cycle de vie réel de la tour (monuments.js)", () => {
-  assert.equal(EIFFEL_GHOST.born, 1887);
-  assert.equal(EIFFEL_GHOST.buildYears, 2.3);
-  assert.ok(Math.abs(CELEBRATION_1889_THRESHOLD - 1889.3) < 1e-9);
+  // Récupère le vrai monument de la tour Eiffel depuis monuments.js
+  const tourEiffelMonument = MONUMENTS.find((m) => m.id === "tourEiffel");
+  assert.ok(tourEiffelMonument, "tourEiffel doit exister dans MONUMENTS");
+  const realTourState = tourEiffelMonument.states[0];
+  assert.ok(realTourState, "tourEiffel doit avoir au moins un état");
+
+  // Vérifie que le fantôme maîtrise le même cycle de vie que la vraie tour
+  assert.equal(EIFFEL_GHOST.born, realTourState.born);
+  assert.equal(EIFFEL_GHOST.buildYears, realTourState.buildYears);
+  assert.ok(Math.abs(CELEBRATION_1889_THRESHOLD - (realTourState.born + realTourState.buildYears)) < 1e-9);
   assert.equal(CELEBRATION_1860_THRESHOLD, 1860);
 });
 
@@ -311,6 +319,41 @@ test("stats : le pool de particules a bien la taille annoncée par le brief (~12
   const scene = new THREE.Scene();
   initGhosts({ scene });
   assert.equal(stats().burstParticles, 120);
+});
+
+test("toggle 📍 off pendant une célébration active : inactive immédiatement (zéro coût)", () => {
+  const scene = new THREE.Scene();
+  initGhosts({ scene });
+  // Amorce une célébration du fantôme (franchissement de 1889,3)
+  let state = baseState({ year: 1888, time: 0 });
+  updateGhosts(0, state);
+  state = { ...state, year: 1890, time: 0.1 };
+  updateGhosts(0.1, state);
+  assert.equal(debugState(state).burstActive, true, "la gerbe doit être active après le franchissement");
+
+  // Éteint le toggle 📍 en plein vol : la gerbe doit s'inactiver tout de suite
+  state = { ...state, showLandmarks: false, time: 0.15 };
+  updateGhosts(0.05, state);
+  const dbg = debugState(state);
+  assert.equal(dbg.burstActive, false, "burst.active doit passer à false quand visible=false");
+  assert.equal(dbg.burstParticlesVisible, 0, "aucune particule ne doit être visible");
+});
+
+test("reducedMotion supprime une célébration en cours : l'anneau et la gerbe inactivent", () => {
+  const scene = new THREE.Scene();
+  initGhosts({ scene });
+  // Anneau : franchissement de 1860
+  let state = baseState({ year: 1855, time: 0 });
+  updateGhosts(0, state);
+  state = { ...state, year: 1865, time: 0.1 };
+  updateGhosts(0.1, state);
+  assert.equal(debugState(state).ringActive, true, "l'anneau doit être actif après le franchissement de 1860");
+
+  // Active reducedMotion : l'anneau doit s'inactiver
+  state = { ...state, reducedMotion: true, time: 0.15 };
+  updateGhosts(0.05, state);
+  const dbg = debugState(state);
+  assert.equal(dbg.ringActive, false, "ring.active doit passer à false quand reducedMotion=true");
 });
 
 test("les deux repères respectent bien les coordonnées de geography.js", () => {

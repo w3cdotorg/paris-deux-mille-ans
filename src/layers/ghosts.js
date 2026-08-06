@@ -446,6 +446,7 @@ function updateBurst(state, visible) {
     for (const s of burst.slots) {
       if (s.mesh.visible) s.mesh.visible = false;
     }
+    burst.active = false;
     return;
   }
   const originX = LANDMARKS.tourEiffel.x;
@@ -518,6 +519,7 @@ function updateRing(state, visible) {
   if (!ring.active) return;
   if (!visible) {
     if (ring.mesh.visible) ring.mesh.visible = false;
+    ring.active = false;
     return;
   }
   const t = (state.time - ring.startTime) / RING_LIFE;
@@ -558,7 +560,7 @@ function updateCelebrations(state) {
     burst.lastTriggerTime = now;
   }
   burst.prevYear = state.year;
-  updateBurst(state, state.showLandmarks);
+  updateBurst(state, state.showLandmarks && !state.reducedMotion);
 
   if (ring.prevYear === null) ring.prevYear = state.year;
   if (
@@ -576,7 +578,7 @@ function updateCelebrations(state) {
     ring.lastTriggerTime = now;
   }
   ring.prevYear = state.year;
-  updateRing(state, state.showLandmarks);
+  updateRing(state, state.showLandmarks && !state.reducedMotion);
 }
 
 // ============================================================================
