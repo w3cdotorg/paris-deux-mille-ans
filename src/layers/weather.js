@@ -1560,7 +1560,7 @@ function updateRain(state, weight) {
     u.uOpacity.value = 0.1 * weight;
   } else {
     u.uTime.value = state.time;
-    // 0,2 et non 0,45 : à pleine opacité, 6 000 streaks à l'échelle du
+    // 0,18 et non 0,45 : à pleine opacité, 6 000 streaks à l'échelle du
     // préréglage `ensemble` masquaient entièrement la ville (première capture
     // 2026-pluie). L'averse doit voiler, pas effacer.
     u.uOpacity.value = 0.18 * weight;
