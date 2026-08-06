@@ -396,7 +396,7 @@ export const GALLO_ROMAIN = {
     { x: 0, z: 1000 },
   ],
   gateWidth: 2,
-  h: 1.7,
+  h: 2.6,
   thickness: 1.0,
   towerRadius: 1.1,
   towerHeightMul: 1.25,
@@ -430,11 +430,15 @@ export const PHILIPPE_AUGUSTE = {
   ],
   gateWidth: 3,
   riverCrossings: PA_RIVER_EDGES,
-  h: 2.4,
+  h: 3.2,
   thickness: 1.15,
   towerRadius: 1.5,
   towerHeightMul: 1.35,
-  stoneColor: 0xac9f86,
+  // Gris froid volontairement éloigné (perceptuellement) de la palette chaude
+  // des enceintes bâties (PAL.plaster/stucco/stone, toutes beige/crème) —
+  // sinon la muraille se confond avec "encore des bâtiments" vue du ciel
+  // (finding de revue de la tâche 9). Cf. rapport pour le delta RGB mesuré.
+  stoneColor: 0x8f9099,
   crenellation: true,
   roofColor: 0x4e5766, // slate blue
 };
@@ -459,11 +463,15 @@ export const CHARLES_V = {
     { x: 118, z: -77.5 }, // milieu du 3e tronçon (vers la Bastille)
   ],
   gateWidth: 3,
-  h: 2.6,
+  h: 3.2,
   thickness: 1.2,
   towerRadius: 1.55,
   towerHeightMul: 1.35,
-  stoneColor: 0xa79b83,
+  // Même famille de gris froid que Philippe Auguste (voir sa note), une nuance
+  // plus sombre pour que les deux enceintes médiévales restent distinguables
+  // l'une de l'autre tout en étant toutes deux nettement plus froides que la
+  // ville bâtie.
+  stoneColor: 0x82838d,
   crenellation: true,
   roofColor: 0x4e5766,
 };
