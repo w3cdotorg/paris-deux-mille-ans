@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as THREE from "three";
 import { lifecycle } from "../src/timeEngine.js";
-import { MONUMENTS, monumentStatesAt, monumentStateAt } from "../src/layers/monuments.js";
+import {
+  MONUMENTS,
+  monumentStatesAt,
+  monumentStateAt,
+  init as initMonuments,
+  forceRescan,
+} from "../src/layers/monuments.js";
 import { MODEL_BUILDERS, CHANTIER_STAGE, TOWER_STAGE } from "../src/monumentModels.js";
 import { ARCHETYPES } from "../src/archetypes.js";
 import { LANDMARKS, MONUMENT_FOOTPRINTS, insideMonumentFootprint } from "../src/geography.js";
@@ -378,6 +385,81 @@ test("modèles : les tours de Notre-Dame dominent la ville — plus hautes que t
     top > tallestOld * 1.5,
     `les tours (${top}) doivent dominer le plus haut bâtiment ancien (${tallestOld})`
   );
+});
+
+// ============================================================================
+// Pousse (buildYears) — un état sans étage doit sortir de terre
+// progressivement, pas apparaître d'un coup à taille finale (régression
+// corrigée : `stageProgress` renvoyait 1 dès que `presence > 0`).
+// ============================================================================
+
+test("pousse : un état sans étage (Sainte-Chapelle) grandit avec la présence", () => {
+  const scene = new THREE.Group();
+  initMonuments({ scene });
+
+  const group = scene.children.find((g) => g.name === "monument_sainteChapelle");
+  assert.ok(group, "groupe de la Sainte-Chapelle introuvable dans la scène");
+  // Une pièce qui pousse (grow:true), sans stage : le corps bas de la chapelle.
+  const piece = group.children.find((c) => !c.isGroup && c.userData.grow && !c.userData.stage);
+  assert.ok(piece, "aucune pièce sans étage à observer");
+  const fullHeight = piece.userData.h;
+
+  const st = MONUMENTS.find((m) => m.id === "sainteChapelle").states[0];
+  const yearAt = (p) => st.born + p * st.buildYears;
+
+  forceRescan(yearAt(0.2));
+  assert.equal(piece.visible, true, "à 20 % du chantier, la pièce doit déjà être visible (elle pousse)");
+  const scaleLow = piece.scale.y;
+
+  forceRescan(yearAt(0.8));
+  const scaleHigh = piece.scale.y;
+
+  // Avant le correctif, les deux valeurs étaient identiques et égales à
+  // `fullHeight` (le vieux fallback de `stageProgress` renvoyait 1 dès que
+  // `presence > 0`). Ici, 20 % doit être visiblement partiel...
+  assert.ok(
+    scaleLow > 0 && scaleLow < fullHeight * 0.9,
+    `à 20 % du chantier, hauteur ${scaleLow} attendue nettement < hauteur finale ${fullHeight}`
+  );
+  // ... et 80 % doit être strictement plus haut que 20 % (croissance monotone).
+  assert.ok(scaleHigh > scaleLow, `la hauteur doit strictement croître (20 % → ${scaleLow}, 80 % → ${scaleHigh})`);
+  // ... et proche de la hauteur finale (léger dépassement `easeOutBack` toléré).
+  assert.ok(
+    scaleHigh > fullHeight * 0.9 && scaleHigh < fullHeight * 1.1,
+    `à 80 %, hauteur ${scaleHigh} attendue proche de la hauteur finale ${fullHeight}`
+  );
+});
+
+test("pousse : le séquencement étagé de Notre-Dame (nef d'abord, tours en dernier) n'a pas régressé", () => {
+  const scene = new THREE.Group();
+  initMonuments({ scene });
+  const group = scene.children.find((g) => g.name === "monument_cathedraleGothique");
+  assert.ok(group, "groupe de la cathédrale introuvable dans la scène");
+
+  const st = MONUMENTS.find((m) => m.id === "notreDame").states.find((s) => s.id === "cathedrale");
+  const yearAt = (p) => st.born + p * st.buildYears;
+
+  // La nef (stage [0, 0.32]).
+  const nave = group.children.find(
+    (c) =>
+      !c.isGroup && Array.isArray(c.userData.stage) && c.userData.stage[0] === 0 && c.userData.stage[1] === 0.32
+  );
+  assert.ok(nave, "pièce de la nef introuvable");
+  // Les deux tours (stage TOWER_STAGE, les seules pièces qui démarrent à 0,72).
+  const towers = group.children.filter(
+    (c) => !c.isGroup && Array.isArray(c.userData.stage) && c.userData.stage[0] === TOWER_STAGE[0]
+  );
+  assert.equal(towers.length, 2, "les deux tours doivent être identifiables par leur stage");
+
+  // À 20 % du chantier : la nef pousse déjà, les tours n'existent pas encore.
+  forceRescan(yearAt(0.2));
+  assert.ok(nave.visible && nave.scale.y > 0, "la nef doit déjà pousser à 20 % du chantier");
+  for (const t of towers) assert.equal(t.visible, false, "les tours ne doivent pas encore être visibles à 20 %");
+
+  // À 85 % (dans la fenêtre TOWER_STAGE) : les tours poussent, la nef est finie.
+  forceRescan(yearAt(0.85));
+  for (const t of towers) assert.ok(t.visible && t.scale.y > 0, "les tours doivent pousser à 85 %");
+  assert.equal(nave.scale.y, nave.userData.h, "la nef, achevée depuis longtemps, reste à sa hauteur finale");
 });
 
 // ============================================================================

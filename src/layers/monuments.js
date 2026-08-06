@@ -411,9 +411,21 @@ function clamp01(v) {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
-/** Progression locale d'une pièce étagée dans la présence globale du chantier. */
+/**
+ * Progression locale d'une pièce dans la présence globale du chantier.
+ *
+ * Une pièce **étagée** (`stage: [a, b]`) suit sa propre fenêtre : absente avant
+ * `a`, montée à `b`. Une pièce **sans étage** (la grande majorité — 15 des 19
+ * états de monuments n'ont aucune pièce étagée) suit directement la présence
+ * globale : à `presence = 0.2` elle est montée à 20 %, à `0.8` à 80 %. C'était
+ * le bug corrigé ici — l'ancien code renvoyait 1 dès que `presence > 0`, donc
+ * ces monuments *apparaissaient* d'un coup à taille finale au lieu de sortir de
+ * terre sur leurs `buildYears`, alors que la démolition (côté `razing`, plus
+ * bas) rétrécit déjà bien ces mêmes pièces avec `presence`. C'est le miroir
+ * exact côté naissance.
+ */
 function stageProgress(stage, presence) {
-  if (!stage) return presence > 0 ? 1 : 0;
+  if (!stage) return clamp01(presence);
   const [a, b] = stage;
   if (presence <= a) return 0;
   if (b <= a) return 1;
