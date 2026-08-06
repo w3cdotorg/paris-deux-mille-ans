@@ -71,6 +71,7 @@ import {
   SEINE_POINTS,
   SEINE_ONMAP_COUNT,
   urbanYear,
+  distanceToSeine,
 } from "../geography.js";
 import { lerp, smoothstep, momentBlend } from "../timeEngine.js";
 import { MOMENTS } from "../timeline.js";
@@ -530,9 +531,46 @@ function riverbankHotspots() {
 }
 
 /**
+ * Distance minimale (unités monde) qu'un emplacement de foule doit garder
+ * avec la Seine. Le lit navigable a un demi-largeur de rendu ~7u (voir
+ * `terrain.js`/`SEINE_BANK_OFFSET`) ; en dessous de ce seuil `groundHeightAt`
+ * retombe sur le lit du fleuve (~-1,5) et la silhouette apparaît coulée. Le
+ * hotspot du Pont-au-Change (centre à ~10,65u de la ligne d'eau, jitter de
+ * 9u) est le cas réel qui déclenche ça — mesuré ~25% des tirages dans l'eau
+ * avant ce garde-fou.
+ */
+const CROWD_RIVER_CLEARANCE = 7.5;
+/**
+ * Bornes le nombre de re-tirages en cas de point tombé dans l'eau — garantit
+ * la terminaison même dans un cas pathologique tout en restant déterministe
+ * (mêmes graines à chaque appel). Mesuré sur les hotspots réels : 6 tirages
+ * suffisent toujours ; cette marge est large.
+ */
+const CROWD_REDRAW_ATTEMPTS = 40;
+
+/**
+ * Tire (x,z) via `drawFn(attempt)` (pur, dépend seulement de `attempt`) et
+ * re-tire — graine avancée par `drawFn` lui-même — tant que le point tombe
+ * dans le lit de la Seine (voir `CROWD_RIVER_CLEARANCE`). Générique : sert
+ * aussi bien aux hotspots (disque) qu'au remplissage générique (anneau).
+ * @param {(attempt:number) => {x:number,z:number}} drawFn
+ * @returns {{x:number,z:number}}
+ */
+function redrawUntilClearOfRiver(drawFn) {
+  let pt = { x: 0, z: 0 };
+  for (let attempt = 0; attempt < CROWD_REDRAW_ATTEMPTS; attempt++) {
+    pt = drawFn(attempt);
+    if (distanceToSeine(pt.x, pt.z) >= CROWD_RIVER_CLEARANCE) break;
+  }
+  return pt;
+}
+
+/**
  * Plan déterministe des emplacements de foule : hotspots pondérés (berges +
  * grands sites), dispersion par hash. Pur — aucune dépendance three.js/DOM,
- * donc testable pour la déterminisme demandée par le brief.
+ * donc testable pour la déterminisme demandée par le brief. Chaque point est
+ * re-tiré (graine avancée, jamais `Math.random`) tant qu'il tombe dans le lit
+ * de la Seine — voir `redrawUntilClearOfRiver`/`CROWD_RIVER_CLEARANCE`.
  * @param {number} count
  * @returns {Array<{x:number,z:number,order:number,uYear:number,yaw:number,bobPhase:number,shade:number}>}
  */
@@ -544,10 +582,12 @@ export function generateCrowdSlots(count = CROWD_MAX) {
   for (const hs of hotspots) {
     const n = Math.round((hs.weight / totalWeight) * count);
     for (let i = 0; i < n && out.length < count; i++) {
-      const ang = hash01(hIdx, i, 1201) * Math.PI * 2;
-      const rad = Math.sqrt(hash01(hIdx, i, 1301)) * hs.r;
-      const x = hs.x + Math.cos(ang) * rad;
-      const z = hs.z + Math.sin(ang) * rad;
+      const { x, z } = redrawUntilClearOfRiver((attempt) => {
+        const seedBase = 1201 + attempt * 97;
+        const ang = hash01(hIdx, i, seedBase) * Math.PI * 2;
+        const rad = Math.sqrt(hash01(hIdx, i, seedBase + 100)) * hs.r;
+        return { x: hs.x + Math.cos(ang) * rad, z: hs.z + Math.sin(ang) * rad };
+      });
       out.push({
         x,
         z,
@@ -564,10 +604,12 @@ export function generateCrowdSlots(count = CROWD_MAX) {
   // centre romain si les hotspots pondérés n'ont pas rempli le quota (arrondi).
   let filler = 0;
   while (out.length < count) {
-    const ang = hash01(9000, filler, 1801) * Math.PI * 2;
-    const rad = 20 + hash01(9000, filler, 1901) * 200;
-    const x = Math.cos(ang) * rad;
-    const z = 60 + Math.sin(ang) * rad;
+    const { x, z } = redrawUntilClearOfRiver((attempt) => {
+      const seedBase = 1801 + attempt * 97;
+      const ang = hash01(9000, filler, seedBase) * Math.PI * 2;
+      const rad = 20 + hash01(9000, filler, seedBase + 100) * 200;
+      return { x: Math.cos(ang) * rad, z: 60 + Math.sin(ang) * rad };
+    });
     out.push({
       x,
       z,
@@ -679,6 +721,22 @@ function buildPersonGeometry() {
   return geo;
 }
 
+/**
+ * Une silhouette est haute de 0,17-0,28u (`bodyH` + tête) — le même problème
+ * de sous-pixel déjà corrigé pour les bateaux (voir `BOAT_VISUAL_SCALE`
+ * ci-dessus) : aux distances de caméra habituelles (`cite`=80, `eiffel`=110),
+ * une personne "à l'échelle réelle" est 1-3px, une moucheture plutôt qu'une
+ * silhouette. Appliqué directement dans l'échelle de la matrice d'instance
+ * (`applyCrowdYear`/`updateCrowdMotion`) plutôt que sur un groupe interne
+ * (comme les bateaux) : `InstancedMesh` n'a qu'une seule matrice par
+ * instance, pas de hiérarchie de groupes possible ici. L'origine locale de
+ * `buildPersonGeometry` est déjà au niveau des pieds (le bas du corps est
+ * translaté à y=0) : une échelle uniforme autour de cette origine ne bouge
+ * donc jamais les pieds — pas de correction de `y` nécessaire pour rester au
+ * sol, contrairement à une géométrie centrée qui aurait dû être recompensée.
+ */
+const CROWD_VISUAL_SCALE = 2.8;
+
 const crowd = {
   mesh: null,
   slots: [],
@@ -728,7 +786,7 @@ function applyCrowdYear(year, qualityCrowds) {
     }
     _p.set(s.x, crowd.slotY[i], s.z);
     _q.setFromAxisAngle(UP, s.yaw);
-    _s.set(1, 1, 1);
+    _s.set(CROWD_VISUAL_SCALE, CROWD_VISUAL_SCALE, CROWD_VISUAL_SCALE);
     _m.compose(_p, _q, _s);
     crowd.mesh.setMatrixAt(i, _m);
     _color.copy(base).multiplyScalar(s.shade);
@@ -752,7 +810,7 @@ function updateCrowdMotion(state) {
     const bob = Math.sin(time * 1.6 + s.bobPhase) * 0.012;
     _p.set(s.x, crowd.slotY[i] + bob, s.z);
     _q.setFromAxisAngle(UP, s.yaw);
-    _s.set(1, 1, 1);
+    _s.set(CROWD_VISUAL_SCALE, CROWD_VISUAL_SCALE, CROWD_VISUAL_SCALE);
     _m.compose(_p, _q, _s);
     crowd.mesh.setMatrixAt(i, _m);
   }

@@ -20,6 +20,7 @@ import {
   stats,
 } from "../src/layers/life.js";
 import { MOMENTS } from "../src/timeline.js";
+import { distanceToSeine } from "../src/geography.js";
 
 function fakeState(year, extra = {}) {
   return { year, time: 3.5, weather: "sun", reducedMotion: false, ...extra };
@@ -176,6 +177,21 @@ test("generateCrowdSlots : chaque emplacement porte une porte d'urbanisation (ur
     assert.ok(Number.isFinite(s.uYear) || s.uYear === Infinity);
     assert.ok(s.order >= 0 && s.order < 1);
   }
+});
+
+test("generateCrowdSlots : aucun emplacement dans le lit de la Seine (review Tâche 13, finding 1 — Pont-au-Change coulait ~25% de ses silhouettes)", () => {
+  // Capacité pleine (3000) : c'est là que le hotspot du Pont-au-Change (le
+  // cas réel identifié en review) tire le plus de points, donc le test qui
+  // couvre le mieux la régression.
+  const slots = generateCrowdSlots(CROWD_MAX);
+  assert.equal(slots.length, CROWD_MAX);
+  let worst = Infinity;
+  for (const s of slots) {
+    const d = distanceToSeine(s.x, s.z);
+    if (d < worst) worst = d;
+    assert.ok(d >= 7.5, `emplacement (${s.x.toFixed(2)}, ${s.z.toFixed(2)}) à ${d.toFixed(2)}u de la Seine — sous le seuil de 7.5u, il serait rendu au niveau du lit`);
+  }
+  assert.ok(worst >= 7.5);
 });
 
 // ============================================================================
