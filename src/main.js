@@ -5,6 +5,7 @@ import * as buildings from "./layers/buildings.js";
 import * as walls from "./layers/walls.js";
 import * as monuments from "./layers/monuments.js";
 import * as rails from "./layers/rails.js";
+import * as life from "./layers/life.js";
 import * as ghosts from "./layers/ghosts.js";
 import { createControls } from "./controls.js";
 import * as ui from "./ui.js";
@@ -53,11 +54,13 @@ const ctx = { scene, renderer, camera, quality };
 // rails après monuments : même dépendance au terrain (groundHeightAt), et
 // leurs couloirs (geography.insideRailCorridor) sont déjà pris en compte par
 // buildings.js à sa génération.
+// life après rails : les bateaux flottent au niveau de l'eau du terrain et
+// les foules/vignettes reposent sur groundHeightAt (terrain), déjà construit.
 // ghosts en dernier : la Tour Eiffel fantôme et la balise « chez nous » sont
 // en matériau additif sans écriture de profondeur — elles doivent se dessiner
-// *après* tout le reste (bâtiments, monuments, rails) pour ne pas produire
-// d'artefacts de tri avec ce qui se trouve derrière elles.
-const layers = [terrain, buildings, walls, monuments, rails, ghosts];
+// *après* tout le reste (bâtiments, monuments, rails, vie) pour ne pas
+// produire d'artefacts de tri avec ce qui se trouve derrière elles.
+const layers = [terrain, buildings, walls, monuments, rails, life, ghosts];
 for (const layer of layers) {
   layer.init(ctx);
 }
@@ -147,6 +150,12 @@ function setYear(year) {
   walls.forceRescan(state.year);
   monuments.forceRescan(state.year);
   rails.forceRescan(state.year);
+  life.forceRescan(state.year);
+  // life.forceRescan ne réécrit que les foules (InstancedMesh) — bateaux,
+  // oiseaux et vignettes suivent l'année via `update()` normal (leur
+  // présence/échelle dépend de state.year à chaque frame, pas d'un
+  // InstancedMesh à reconstruire) : un appel synchrone les recale ici aussi.
+  life.update(0, state);
   // ghosts n'a pas de rescan coûteux à forcer (pas d'InstancedMesh à réécrire) :
   // un simple update(0, state) suffit à recaler son opacité/visibilité sur la
   // nouvelle année avant le rendu synchrone ci-dessous, sans attendre la
@@ -172,6 +181,10 @@ window.__paris = {
   monumentStats: () => monuments.stats(),
   railCounts: (year) => rails.debugCounts(year ?? state.year),
   railStats: () => rails.stats(),
+  lifeCounts: (year) => life.debugCounts(year ?? state.year),
+  lifeStats: () => life.stats(),
+  lifeBoats: () => life.debugBoats(),
+  lifeBirds: () => life.debugBirds(),
   ghostState: () => ghosts.debugState(state),
   ghostStats: () => ghosts.stats(),
   // Même rôle que le bouton météo de l'UI, en un appel : la vérification
