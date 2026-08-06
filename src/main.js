@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { YEAR_MIN, YEAR_MAX } from "./timeline.js";
 import * as terrain from "./layers/terrain.js";
 import * as buildings from "./layers/buildings.js";
+import * as walls from "./layers/walls.js";
 import { createControls } from "./controls.js";
 import * as ui from "./ui.js";
 
@@ -44,7 +45,7 @@ const ctx = { scene, renderer, camera, quality };
 // buildings after terrain: it samples the *rendered* ground mesh
 // (groundHeightAt) to sit buildings on the real surface, so terrain's
 // init() (which builds that mesh) must have already run.
-const layers = [terrain, buildings];
+const layers = [terrain, buildings, walls];
 for (const layer of layers) {
   layer.init(ctx);
 }
@@ -131,6 +132,7 @@ function setYear(year) {
   state.year = Math.max(YEAR_MIN, Math.min(YEAR_MAX, year));
   terrain.forceRescan(state.year);
   buildings.rebuildForYear(state.year);
+  walls.forceRescan(state.year);
   ui.update(0, state);
   renderer.render(scene, camera);
 }
@@ -146,6 +148,7 @@ window.__paris = {
   camera,
   buildingStats: () => buildings.stats(),
   debugCounts: (year) => buildings.debugCounts(year ?? state.year),
+  wallCounts: (year) => walls.debugCounts(year ?? state.year),
   renderer,
   scene,
 };
