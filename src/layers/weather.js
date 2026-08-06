@@ -618,12 +618,14 @@ export function blendSignatures(year, out) {
  *   moment 3 reste sa nuit orange.
  * - `overcast` : désature de OVERCAST_DESATURATION, tire le ciel vers un gris
  *   bas, adoucit le soleil, remonte le remplissage hémisphérique et rapproche
- *   le brouillard.
+ *   le brouillard — le tout pondéré par `1 - nightness`, comme `sun`, donc
+ *   nul sur le moment 3.
  * - `rain` : couvert + sol assombri (hémisphère bas × 0,55), exposition −15 %,
- *   brouillard encore plus près. La Seine ressort d'elle-même : son shader
- *   (terrain.js) ne dépend pas de l'éclairage, donc quand le sol s'assombrit,
- *   le fleuve devient le point clair de l'image — l'effet « pavé mouillé »
- *   recherché, sans toucher au matériau de l'eau.
+ *   brouillard encore plus près — même pondération par `1 - nightness`. La
+ *   Seine ressort d'elle-même : son shader (terrain.js) ne dépend pas de
+ *   l'éclairage, donc quand le sol s'assombrit, le fleuve devient le point
+ *   clair de l'image — l'effet « pavé mouillé » recherché, sans toucher au
+ *   matériau de l'eau.
  * - `night` : cible nuit lisible (ciel #1a2550, lune généreuse, plancher
  *   d'exposition), mélangée avec un verrou sur les signatures déjà nocturnes.
  *
@@ -644,25 +646,33 @@ export function applyWeather(sig, weather, out) {
   }
 
   if (weather === "overcast" || weather === "rain") {
-    for (const key of COLOR_FIELDS) desaturateInPlace(out[key], OVERCAST_DESATURATION);
+    // Comme le mode `sun` : toute la modulation est pondérée par `day`
+    // (= 1 - nightness), donc nulle sur une signature déjà pleinement
+    // nocturne (le siège, 885). Sans ce poids, le couvert/la pluie
+    // désaturaient et refroidissaient 885 quand même — en contradiction avec
+    // la règle documentée « 885 reste brun-rouge quelle que soit la météo »
+    // (revue de la tâche 14). `lerp(1, x, day)` vaut 1 (inchangé) à day = 0
+    // et x (l'effet plein) à day = 1, exactement comme au-dessus.
+    for (const key of COLOR_FIELDS) desaturateInPlace(out[key], OVERCAST_DESATURATION * day);
     pullRgbToward(out.skyTop, OVERCAST_SKY_TOP, OVERCAST_SKY_PULL * day);
     pullRgbToward(out.skyHorizon, OVERCAST_SKY_HORIZON, OVERCAST_SKY_PULL * day);
     pullRgbToward(out.fogColor, OVERCAST_SKY_HORIZON, 0.35 * day);
     out.sunIntensity = sig.sunIntensity * lerp(1, 0.55, day);
-    out.hemiIntensity = sig.hemiIntensity * 1.15;
-    out.fogNear = Math.max(MIN_FOG_NEAR, sig.fogNear * 0.75);
-    out.fogFar = Math.max(MIN_FOG_FAR, sig.fogFar * 0.85);
-    out.exposure = sig.exposure * 0.96;
+    out.hemiIntensity = sig.hemiIntensity * lerp(1, 1.15, day);
+    out.fogNear = Math.max(MIN_FOG_NEAR, sig.fogNear * lerp(1, 0.75, day));
+    out.fogFar = Math.max(MIN_FOG_FAR, sig.fogFar * lerp(1, 0.85, day));
+    out.exposure = sig.exposure * lerp(1, 0.96, day);
     if (weather === "rain") {
       // Toits et chaussées mouillés : le sol renvoie moins, le ciel un peu
       // plus — c'est ce contraste (et non une vraie réflexion) qui donne
       // l'averse. La Seine, elle, garde le ciel plus clair et ressort donc.
-      out.hemiGround.r *= 0.55;
-      out.hemiGround.g *= 0.55;
-      out.hemiGround.b *= 0.55;
-      out.fogNear = Math.max(MIN_FOG_NEAR, sig.fogNear * 0.65);
-      out.fogFar = Math.max(MIN_FOG_FAR, sig.fogFar * 0.75);
-      out.exposure = sig.exposure * 0.85;
+      const groundMul = lerp(1, 0.55, day);
+      out.hemiGround.r *= groundMul;
+      out.hemiGround.g *= groundMul;
+      out.hemiGround.b *= groundMul;
+      out.fogNear = Math.max(MIN_FOG_NEAR, sig.fogNear * lerp(1, 0.65, day));
+      out.fogFar = Math.max(MIN_FOG_FAR, sig.fogFar * lerp(1, 0.75, day));
+      out.exposure = sig.exposure * lerp(1, 0.85, day);
       out.lamps = Math.max(sig.lamps, 0.3 * day);
     }
     return out;

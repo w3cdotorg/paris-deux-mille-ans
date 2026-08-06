@@ -231,6 +231,60 @@ test("moment 3 + nuit : reste orange (verrou) au lieu de basculer au bleu géné
   assert.equal(siege.fires, 1, "les feux brûlent toujours");
 });
 
+test("moment 3 + couvert : la lumière reste inchangée (seule la pluie/le ciel bas est visuel)", () => {
+  // Revue tâche 14 : le couvert désaturait/refroidissait 885 malgré la règle
+  // documentée « 885 reste brun-rouge quelle que soit la météo ». La
+  // modulation doit être pondérée par (1 - nightness) exactement comme `sun`.
+  const base = sigAt(885);
+  const out = applyWeather(base, "overcast", createSignatureTarget());
+  const eps = 1e-9;
+  assert.ok(Math.abs(out.skyTop.r - base.skyTop.r) < eps, "skyTop.r");
+  assert.ok(Math.abs(out.skyTop.g - base.skyTop.g) < eps, "skyTop.g");
+  assert.ok(Math.abs(out.skyTop.b - base.skyTop.b) < eps, "skyTop.b");
+  assert.ok(Math.abs(out.fogColor.r - base.fogColor.r) < eps, "fogColor.r");
+  assert.ok(Math.abs(out.fogColor.g - base.fogColor.g) < eps, "fogColor.g");
+  assert.ok(Math.abs(out.fogColor.b - base.fogColor.b) < eps, "fogColor.b");
+  assert.ok(Math.abs(out.fogFar - base.fogFar) < eps, `fogFar ${base.fogFar} → ${out.fogFar}`);
+  assert.ok(Math.abs(out.fogNear - base.fogNear) < eps, `fogNear ${base.fogNear} → ${out.fogNear}`);
+  assert.ok(
+    Math.abs(out.exposure - base.exposure) < eps,
+    `exposure ${base.exposure} → ${out.exposure}`
+  );
+  assert.ok(
+    Math.abs(out.hemiIntensity - base.hemiIntensity) < eps,
+    `hemiIntensity ${base.hemiIntensity} → ${out.hemiIntensity}`
+  );
+  assert.ok(Math.abs(out.sunIntensity - base.sunIntensity) < eps, "sunIntensity");
+});
+
+test("moment 3 + pluie : la lumière reste inchangée (les streaks peuvent quand même tomber)", () => {
+  // Même règle que ci-dessus pour `rain` — y compris le sol assombri
+  // (hemiGround × 0,55) qui n'était pas pondéré du tout. Les gouttes en tant
+  // que telles (couche visuelle, hors signature) restent libres de tomber :
+  // c'est la LUMIÈRE qui doit rester brune-rouge, pas l'atmosphère.
+  const base = sigAt(885);
+  const out = applyWeather(base, "rain", createSignatureTarget());
+  const eps = 1e-9;
+  assert.ok(Math.abs(out.skyTop.r - base.skyTop.r) < eps, "skyTop.r");
+  assert.ok(Math.abs(out.skyTop.g - base.skyTop.g) < eps, "skyTop.g");
+  assert.ok(Math.abs(out.skyTop.b - base.skyTop.b) < eps, "skyTop.b");
+  assert.ok(Math.abs(out.fogColor.r - base.fogColor.r) < eps, "fogColor.r");
+  assert.ok(Math.abs(out.fogFar - base.fogFar) < eps, `fogFar ${base.fogFar} → ${out.fogFar}`);
+  assert.ok(Math.abs(out.fogNear - base.fogNear) < eps, `fogNear ${base.fogNear} → ${out.fogNear}`);
+  assert.ok(
+    Math.abs(out.exposure - base.exposure) < eps,
+    `exposure ${base.exposure} → ${out.exposure}`
+  );
+  assert.ok(
+    Math.abs(out.hemiIntensity - base.hemiIntensity) < eps,
+    `hemiIntensity ${base.hemiIntensity} → ${out.hemiIntensity}`
+  );
+  assert.ok(
+    Math.abs(luminance(out.hemiGround) - luminance(base.hemiGround)) < eps,
+    "hemiGround (sol) doit rester brun-rouge, pas assombri"
+  );
+});
+
 test("applyWeather : le soleil pousse une signature diurne, jamais une nocturne", () => {
   const day = sigAt(1889);
   const dayOut = applyWeather(day, "sun", createSignatureTarget());
