@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { YEAR_MIN, YEAR_MAX } from "./timeline.js";
+import * as weather from "./layers/weather.js";
 import * as terrain from "./layers/terrain.js";
 import * as buildings from "./layers/buildings.js";
 import * as walls from "./layers/walls.js";
@@ -42,10 +43,16 @@ const state = {
   time: 0,
 };
 
-const quality = { crowds: 1, trees: 1, rain: 1, boats: 1, shadows: 1 };
+const quality = { crowds: 1, trees: 1, rain: 1, boats: 1, shadows: 1, windows: 1 };
 const ctx = { scene, renderer, camera, quality };
 
 // Layer registry: each module exports init(ctx) and update(dt, state).
+// weather en premier : c'est lui qui possède tout l'éclairage (hémisphérique,
+// soleil/lune, brouillard, dôme de ciel, exposition, pluie, feux, fenêtres
+// allumées). L'ordre n'a pas d'importance pour three (les lumières sont
+// collectées à chaque rendu), mais il rend l'intention lisible — et weather
+// diffère ses nuages de points au sol à sa première frame, puisqu'ils
+// échantillonnent le maillage de terrain construit juste après.
 // buildings after terrain: it samples the *rendered* ground mesh
 // (groundHeightAt) to sit buildings on the real surface, so terrain's
 // init() (which builds that mesh) must have already run.
@@ -60,7 +67,7 @@ const ctx = { scene, renderer, camera, quality };
 // en matériau additif sans écriture de profondeur — elles doivent se dessiner
 // *après* tout le reste (bâtiments, monuments, rails, vie) pour ne pas
 // produire d'artefacts de tri avec ce qui se trouve derrière elles.
-const layers = [terrain, buildings, walls, monuments, rails, life, ghosts];
+const layers = [weather, terrain, buildings, walls, monuments, rails, life, ghosts];
 for (const layer of layers) {
   layer.init(ctx);
 }
@@ -156,6 +163,12 @@ function setYear(year) {
   // présence/échelle dépend de state.year à chaque frame, pas d'un
   // InstancedMesh à reconstruire) : un appel synchrone les recale ici aussi.
   life.update(0, state);
+  // weather : la signature d'époque suit l'année à chaque frame, mais le semis
+  // de fenêtres allumées est débouncé (WINDOW_REPOSITION_*) — forceRescan le
+  // repositionne tout de suite pour que la capture montre la bonne époque
+  // d'éclairage (bougies / gaz / électrique) dès ce rendu synchrone.
+  weather.forceRescan(state.year);
+  weather.update(0, state);
   // ghosts n'a pas de rescan coûteux à forcer (pas d'InstancedMesh à réécrire) :
   // un simple update(0, state) suffit à recaler son opacité/visibilité sur la
   // nouvelle année avant le rendu synchrone ci-dessous, sans attendre la
@@ -187,13 +200,20 @@ window.__paris = {
   lifeBirds: () => life.debugBirds(),
   ghostState: () => ghosts.debugState(state),
   ghostStats: () => ghosts.stats(),
-  // Même rôle que le bouton météo de l'UI, en un appel : la vérification
-  // automatisée en a besoin pour capturer la nuit (scintillement de la tour
-  // Eiffel, phares du périphérique). La tâche 14 traitera l'éclairage lui-même.
-  setWeather: (weather) => {
-    state.weather = weather;
+  // Même rôle que le bouton météo de l'UI, en un appel — mais la transition
+  // de 1,5 s est court-circuitée (`forceWeather`) pour qu'une capture prise
+  // juste après montre bien le mode demandé, pas le milieu du fondu.
+  setWeather: (mode) => {
+    state.weather = mode;
+    weather.forceWeather(state);
+    weather.update(0, state);
+    monuments.update(0, state);
+    rails.update(0, state);
     ui.update(0, state);
+    renderer.render(scene, camera);
   },
+  weatherState: () => weather.debugState(),
+  weatherStats: () => weather.stats(),
   renderer,
   scene,
 };

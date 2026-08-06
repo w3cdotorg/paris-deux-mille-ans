@@ -1,6 +1,12 @@
 /**
  * Terrain layer — sol relief + Seine animée + îles + forêts + marais.
  *
+ * Cette couche ne possède **plus** l'éclairage : le rig provisoire qu'elle
+ * portait (hémisphérique + directionnelle, brouillard, dôme de ciel,
+ * `scene.background`) a été extrait vers `layers/weather.js` à la tâche 14,
+ * qui le remplace par 14 signatures d'époque × 4 modes météo. Terrain garde sa
+ * géométrie, ses couleurs de sol et le miroitement de l'eau.
+ *
  * Layer contract: init(ctx) builds the (mostly static) scene graph once;
  * update(dt, state) is called every frame and re-derives everything that
  * depends on state.year, but only actually recomputes when the (rounded)
@@ -670,70 +676,6 @@ function updateMarshes(year) {
 }
 
 // ============================================================================
-// Sky + lighting
-// ============================================================================
-
-const SKY_VERTEX_SHADER = `
-  varying vec3 vWorldPos;
-  void main() {
-    vWorldPos = position;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-
-const SKY_FRAGMENT_SHADER = `
-  varying vec3 vWorldPos;
-  uniform vec3 uTop;
-  uniform vec3 uHorizon;
-  void main() {
-    // Tuned so a steeply-pitched aerial camera (looking mostly downward)
-    // still sees real sky blue near the top of frame, fading to the pale
-    // horizon tone only where the view ray dips well below level.
-    float h = clamp(normalize(vWorldPos).y * 1.2 + 0.92, 0.0, 1.0);
-    gl_FragColor = vec4(mix(uHorizon, uTop, h), 1.0);
-  }
-`;
-
-function buildSky(ctx) {
-  const geometry = new THREE.SphereGeometry(3200, 32, 16);
-  const material = new THREE.ShaderMaterial({
-    uniforms: {
-      uTop: { value: new THREE.Color(0x6fa8d0) },
-      // Warm atmospheric tint, deliberately a different hue from the fog
-      // color below — with the camera steepened (review Critical 2) the
-      // two should barely ever meet, but keeping them distinct means any
-      // residual sliver still reads as a proper (if hazy) horizon line
-      // rather than dome and fog melting into one shapeless pale mass.
-      uHorizon: { value: new THREE.Color(0xf3e6cf) },
-    },
-    vertexShader: SKY_VERTEX_SHADER,
-    fragmentShader: SKY_FRAGMENT_SHADER,
-    side: THREE.BackSide,
-    depthWrite: false,
-    fog: false,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.frustumCulled = false;
-  ctx.scene.add(mesh);
-
-  // Distinct from the dome's uHorizon (see above) and much tighter than a
-  // first pass — dense enough to soften the far countryside, starting well
-  // past the framed Paris core so the urban carpet/forest read crisply.
-  ctx.scene.background = new THREE.Color(0x9fb8c4);
-  ctx.scene.fog = new THREE.Fog(0x9fb8c4, 1800, 3200);
-}
-
-function addLights(ctx) {
-  const hemi = new THREE.HemisphereLight(0xbfe0f0, 0x5b4a35, 0.85);
-  ctx.scene.add(hemi);
-
-  const sun = new THREE.DirectionalLight(0xfff2df, 0.9);
-  sun.position.set(650, 780, 420);
-  sun.castShadow = false;
-  ctx.scene.add(sun);
-}
-
-// ============================================================================
 // Rescan orchestration
 // ============================================================================
 
@@ -772,8 +714,6 @@ export function forceRescan(year) {
 // ============================================================================
 
 export function init(ctx) {
-  buildSky(ctx);
-  addLights(ctx);
   buildGround(ctx);
   buildRiver(ctx);
 
