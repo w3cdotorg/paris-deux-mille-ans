@@ -13,6 +13,7 @@ import { createControls } from "./controls.js";
 import * as ui from "./ui.js";
 import * as narration from "./narration.js";
 import { createPlayback } from "./play.js";
+import * as audio from "./audio.js";
 
 const canvas = document.querySelector("#scene");
 
@@ -142,6 +143,12 @@ function advancePlayback(dt) {
 // DOM (canvas for tap/raycast, #pdma-ui for the card/counter/label) and the
 // ui.js bus, not just `ctx`/`state`.
 narration.init({ scene, camera, canvas }, state);
+
+// Tâche 17 — sons d'ambiance procéduraux (Web Audio). Pas une couche 3D (pas
+// de scène à lui passer), mais même contrat init/update — voir audio.js pour
+// l'architecture complète (contexte paresseux au premier geste, nappes
+// crossfadées par momentBlend comme la lumière).
+audio.init(ctx);
 
 // ui.js never mutates `state` directly; it only emits bus events. This is
 // the one place that translates them into state mutations (or, for
@@ -323,6 +330,14 @@ window.__paris = {
     state: () => narration.debugState(),
     voices: () => narration.debugVoices(),
   },
+  // Tâche 17 — sons d'ambiance procéduraux. `rms()` lit l'AnalyserNode posé
+  // juste après le gain maître (0 tant que 🔈 est éteint, ou que le contexte
+  // n'a pas encore été créé par un vrai geste utilisateur).
+  audio: {
+    state: () => audio.debugState(),
+    rms: () => audio.getMasterRMS(),
+    analyser: () => audio.getAnalyser(),
+  },
   // Tâche 16 — ▶️ Lecture : le voyage automatique. `tick(dt)` appelle le
   // même chemin que la boucle animate() (`advancePlayback`), ce qui permet
   // à Playwright de driver tout le voyage avec des `dt` programmatiques
@@ -361,6 +376,7 @@ function animate() {
   advancePlayback(dt);
   ui.update(dt, state);
   narration.update(dt, state);
+  audio.update(dt, state);
 
   renderer.render(scene, camera);
 
