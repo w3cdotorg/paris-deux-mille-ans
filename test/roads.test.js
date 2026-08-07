@@ -4,14 +4,17 @@ import * as THREE from "three";
 import {
   ROADS,
   ROAD_WIDTH_DEFAULT,
+  ROAD_MAX_CHORD,
   roadPolylines,
   roadsStateAt,
+  subdividePolyline,
   init as initRoads,
   forceRescan as roadsForceRescan,
   update as updateRoads,
   debugCounts as roadDebugCounts,
   stats as roadStats,
 } from "../src/layers/roads.js";
+import { wallRingPlan } from "../src/layers/walls.js";
 import { heightAt } from "../src/geography.js";
 import { lifecycle } from "../src/timeEngine.js";
 
@@ -132,6 +135,94 @@ test("géométrie : les Boulevards des Maréchaux forment un anneau fermé, à l
   const road = ROADS.find((r) => r.id === "boulevardsMarechaux");
   assert.equal(road.closed, true);
   assert.ok(road.points.length >= 24);
+});
+
+// ============================================================================
+// subdividePolyline — correctif revue post-v1, critique n°1 (relief)
+// ============================================================================
+
+test("subdividePolyline : une corde courte (< maxChord) n'est pas subdivisée", () => {
+  const points = [{ x: 0, z: 0 }, { x: 5, z: 0 }];
+  const out = subdividePolyline(points, false, 10);
+  assert.deepEqual(out, points);
+});
+
+test("subdividePolyline : une longue corde ouverte reçoit des points intermédiaires équidistants, extrémités préservées", () => {
+  const points = [{ x: 0, z: 0 }, { x: 100, z: 0 }];
+  const out = subdividePolyline(points, false, 12);
+  assert.ok(out.length > 2, `attendu plus de 2 points, obtenu ${out.length}`);
+  assert.deepEqual(out[0], points[0]);
+  assert.deepEqual(out[out.length - 1], points[1]);
+  for (let i = 1; i < out.length; i++) {
+    const d = Math.hypot(out[i].x - out[i - 1].x, out[i].z - out[i - 1].z);
+    assert.ok(d <= 12 + 1e-9, `corde ${i} = ${d}, attendu <= 12`);
+  }
+});
+
+test("subdividePolyline : une polyligne à plusieurs segments subdivise chaque arête indépendamment", () => {
+  const points = [{ x: 0, z: 0 }, { x: 50, z: 0 }, { x: 50, z: 30 }];
+  const out = subdividePolyline(points, false, 10);
+  for (let i = 1; i < out.length; i++) {
+    const d = Math.hypot(out[i].x - out[i - 1].x, out[i].z - out[i - 1].z);
+    assert.ok(d <= 10 + 1e-9, `corde ${i} = ${d}`);
+  }
+  // Le coude (50,0) doit toujours être un point exact de la sortie.
+  assert.ok(out.some((p) => Math.abs(p.x - 50) < 1e-9 && Math.abs(p.z - 0) < 1e-9));
+});
+
+test("subdividePolyline : anneau fermé — la corde de fermeture (dernier -> premier) est aussi subdivisée, sans dupliquer le premier point", () => {
+  const points = [{ x: 0, z: 0 }, { x: 100, z: 0 }, { x: 100, z: 100 }, { x: 0, z: 100 }];
+  const out = subdividePolyline(points, true, 15);
+  // Pas de doublon du premier point à la fin.
+  const last = out[out.length - 1];
+  assert.ok(!(last.x === points[0].x && last.z === points[0].z));
+  // Chaque corde, y compris celle qui boucle du dernier point vers le premier
+  // (via l'indexation cyclique de polylineEdges), respecte maxChord.
+  const n = out.length;
+  for (let i = 0; i < n; i++) {
+    const a = out[i];
+    const b = out[(i + 1) % n];
+    const d = Math.hypot(b.x - a.x, b.z - a.z);
+    assert.ok(d <= 15 + 1e-9, `corde ${i} = ${d}`);
+  }
+});
+
+test("subdividePolyline : moins de 2 points -> renvoyé tel quel (rien à subdiviser)", () => {
+  assert.deepEqual(subdividePolyline([], false, 10), []);
+  assert.deepEqual(subdividePolyline([{ x: 1, z: 2 }], false, 10), [{ x: 1, z: 2 }]);
+});
+
+// ============================================================================
+// Relief — chaque segment reste collé au sol, même sur un flanc de colline
+// ============================================================================
+//
+// Reproduit numériquement la mesure du rapport de revue : avant le
+// correctif, routeSaintDenis (140u sur le flanc de Montmartre) avait un écart
+// de ~14,5u entre l'échantillon au milieu du segment brut et la hauteur à ses
+// extrémités. Avec la subdivision (ROAD_MAX_CHORD), chaque segment de
+// CHAQUE axe doit rester sous le seuil de ~1,5u fixé par la revue.
+
+test("relief : après subdivision, aucun segment d'aucun des 12 axes ne s'écarte du sol de plus de ~1.5u à ses extrémités", () => {
+  const THRESHOLD = 1.5;
+  let worst = 0;
+  let worstId = null;
+  for (const road of ROADS) {
+    for (const points of roadPolylines(road)) {
+      const dense = subdividePolyline(points, !!road.closed, ROAD_MAX_CHORD);
+      const plan = wallRingPlan(dense, { closed: !!road.closed, towerEvery: 0, gates: [] });
+      for (const seg of plan.segments) {
+        const sample = heightAt(seg.midX, seg.midZ);
+        const h1 = heightAt(seg.x1, seg.z1);
+        const h2 = heightAt(seg.x2, seg.z2);
+        const err = Math.max(Math.abs(sample - h1), Math.abs(sample - h2));
+        if (err > worst) {
+          worst = err;
+          worstId = road.id;
+        }
+      }
+    }
+  }
+  assert.ok(worst < THRESHOLD, `pire écart = ${worst.toFixed(3)}u (${worstId}), attendu < ${THRESHOLD}u`);
 });
 
 // ============================================================================

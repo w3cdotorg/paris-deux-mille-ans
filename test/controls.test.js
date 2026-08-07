@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { panVectorFromKeys, verticalOrbitDelta, PRESETS } from "../src/controls.js";
+import { panVectorFromKeys, verticalOrbitDelta, elevateTargetY, PRESETS } from "../src/controls.js";
 
 // ============================================================================
 // panVectorFromKeys — ZQSD/WASD key-pan (post-v1)
@@ -99,4 +99,61 @@ test("verticalOrbitDelta: horizontal axis is untouched by this helper — only e
 test("PRESETS: ensemble preset unchanged (arrows/1-4 rely on this, out of scope for this change)", () => {
   assert.deepEqual(PRESETS.ensemble.target, [-140, 0, -80]);
   assert.equal(PRESETS.ensemble.distance, 1105.66);
+});
+
+// ============================================================================
+// elevateTargetY — correctif revue post-v1, critique n°2 (target terrain-aware)
+// ============================================================================
+
+test("elevateTargetY: dt <= 0 snaps immediately to desiredY (instant placements)", () => {
+  assert.equal(elevateTargetY(0, 33.8, 0, 6), 33.8);
+  assert.equal(elevateTargetY(100, -2, -1, 6), -2);
+});
+
+test("elevateTargetY: dt > 0 moves toward desiredY without ever overshooting it", () => {
+  const next = elevateTargetY(0, 10, 1 / 60, 6);
+  assert.ok(next > 0 && next < 10, `expected 0 < next < 10, got ${next}`);
+});
+
+test("elevateTargetY: already at desiredY stays put", () => {
+  assert.equal(elevateTargetY(5, 5, 1 / 60, 6), 5);
+});
+
+test("elevateTargetY: a larger dt converges closer to desiredY than a smaller one (monotonic approach)", () => {
+  const near = elevateTargetY(0, 10, 1 / 60, 6);
+  const far = elevateTargetY(0, 10, 1, 6);
+  assert.ok(far > near, `expected larger dt to get closer to target, got near=${near} far=${far}`);
+  assert.ok(far < 10);
+});
+
+test("elevateTargetY: a very large dt converges arbitrarily close to desiredY (never reaches it exactly, but the residual becomes negligible)", () => {
+  const next = elevateTargetY(0, 10, 100, 6);
+  assert.ok(Math.abs(next - 10) < 1e-6, `expected ~10, got ${next}`);
+});
+
+test("elevateTargetY: symmetric for descending toward a lower desiredY (no special-casing of sign)", () => {
+  const next = elevateTargetY(10, 0, 1 / 60, 6);
+  assert.ok(next < 10 && next > 0, `expected 0 < next < 10, got ${next}`);
+});
+
+// ============================================================================
+// Camera-above-ground clearance (critique n°2) — reachable at MIN_DISTANCE
+// ============================================================================
+//
+// Motivating scenario from the review: panning the target onto Montmartre
+// (~33.7u peak after relief exaggeration) and zooming to MIN_DISTANCE (18)
+// used to be able to put the camera inside the hill, because clampAboveGround
+// only ever compared against target.y, which stayed permanently 0. With
+// elevateTargetY gluing target.y to the terrain, the camera's own height
+// (target.y + radius*cos(phi)) inherits the elevation — checked end-to-end
+// (against the real DOM/camera factory) by the Playwright verification in
+// this task's report; this test only re-confirms the pure math in isolation:
+// once target.y has converged to the hill's height, the *minimum* camera
+// height achievable at MIN_DISTANCE (phi at its shallowest, PHI_MIN) already
+// clears the hill's own peak by construction (radius*cos(PHI_MIN) > 0).
+test("elevateTargetY: once converged onto a hilltop, the target itself sits near the hill height (camera inherits it, not just 0)", () => {
+  const hillHeight = 33.8; // Montmartre peak, post-exaggeration (see geography.js HILLS)
+  let y = 0;
+  for (let i = 0; i < 300; i++) y = elevateTargetY(y, hillHeight, 1 / 60, 6); // ~5s of frames
+  assert.ok(y > hillHeight - 0.5, `expected target.y to have converged near ${hillHeight}, got ${y}`);
 });

@@ -50,6 +50,25 @@ export function formatYear(year) {
 }
 
 /**
+ * Correctif revue post-v1 (important n°3) : vrai pour un `tagName` de
+ * contrôle de formulaire natif qui capture le clavier pour son propre usage
+ * (taper, glisser un curseur, choisir une option) — les raccourcis clavier
+ * *globaux* (ZQSD/WASD de controls.js, flèches ± années de main.js, Espace
+ * ci-dessous) doivent tous s'effacer devant lui, sinon focus un curseur de
+ * volume `<input type="range">` et appuyer sur D/→ double-déclenche : une
+ * fois le pas natif du curseur, une fois notre raccourci global. Prédicat
+ * partagé — controls.js et main.js l'importent aussi, plutôt que de
+ * dupliquer cette liste de tagNames à trois endroits.
+ *
+ * Pure — testable sans DOM.
+ * @param {string} tagName tagName (MAJUSCULES, comme le DOM le fournit)
+ * @returns {boolean}
+ */
+export function isFormControlTag(tagName) {
+  return tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
+}
+
+/**
  * Tâche 16 (correctif revue) : la barre d'espace ne doit toggler la lecture
  * automatique que si le focus n'est PAS sur un autre bouton — sinon un
  * utilisateur clavier qui tabule jusqu'à 🔊/☀️/⚙️/une icône de la frise et
@@ -59,10 +78,11 @@ export function formatYear(year) {
  * activerait à la fois notre dispatch explicite ET le clic natif simulé par
  * le navigateur, pour un double toggle.
  *
- * Post-v1 : même garde étendue aux `<input>` (les curseurs de volume 🔈/🔊)
- * — sans elle, un enfant qui règle le volume au clavier (Tab jusqu'au
- * curseur, puis Espace) déclencherait ▶️/⏸ en même temps que la valeur du
- * curseur, une interférence qu'aucune des deux actions ne justifie.
+ * Post-v1 : même garde étendue aux `<input>` (les curseurs de volume 🔈/🔊,
+ * via `isFormControlTag`) — sans elle, un enfant qui règle le volume au
+ * clavier (Tab jusqu'au curseur, puis Espace) déclencherait ▶️/⏸ en même
+ * temps que la valeur du curseur, une interférence qu'aucune des deux
+ * actions ne justifie.
  *
  * Pure — testable sans DOM.
  * @param {string} targetTagName tagName (MAJUSCULES, comme le DOM le fournit)
@@ -72,7 +92,7 @@ export function formatYear(year) {
  */
 export function shouldSpaceTogglePlayback(targetTagName, isPlayBtn) {
   if (isPlayBtn) return true;
-  return targetTagName !== "BUTTON" && targetTagName !== "INPUT";
+  return targetTagName !== "BUTTON" && !isFormControlTag(targetTagName);
 }
 
 // ============================================================================

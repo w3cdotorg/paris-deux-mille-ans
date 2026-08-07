@@ -300,6 +300,12 @@ const YEAR_STEP = 20;
 const PRESET_KEYS = { 1: "ensemble", 2: "cite", 3: "chezNous", 4: "eiffel" };
 
 window.addEventListener("keydown", (event) => {
+  // Correctif revue post-v1 (important n°3) : un curseur de volume 🔈/🔊
+  // (ou tout autre contrôle de formulaire) focus doit garder ses propres
+  // flèches ← → — sinon un enfant qui règle le volume au clavier fait AUSSI
+  // sauter l'année de ±20 ans à chaque pression (même garde que ZQSD dans
+  // controls.js, prédicat partagé via ui.js).
+  if (ui.isFormControlTag(event.target && event.target.tagName)) return;
   if (event.key === "ArrowRight") {
     // Same throttled path as a handle drag: a plain assignment, picked up
     // by terrain's per-frame debounced rescan — never an immediate forced

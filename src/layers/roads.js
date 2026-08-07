@@ -50,6 +50,65 @@ function clamp01(v) {
 }
 
 // ============================================================================
+// Subdivision — pré-passe corrective (revue post-v1, critique n°1)
+// ============================================================================
+//
+// Ces tracés sont hand-authored avec 3 à 6 points sur des centaines
+// d'unités, et `wallRingPlan` (réutilisé pour la segmentation, cf. docstring
+// d'en-tête) échantillonne le sol UNIQUEMENT au milieu de chaque segment —
+// sur un flanc de colline (Montmartre, Sainte-Geneviève, Chaillot), la
+// hauteur au milieu d'une corde de 140 unités peut différer de 10-15 unités
+// de la hauteur à ses extrémités : le ruban flotte au-dessus du relief d'un
+// côté, le tranche de l'autre. Subdiviser AVANT de segmenter (voir
+// `buildRoads`) fait que chaque segment reste court, donc son échantillon au
+// milieu reste proche de ses deux extrémités même sur une pente raide —
+// exactement le même principe de densité que les 96-128 points des anneaux
+// de rails.js / `boulevardsMarechaux` ci-dessous, qui eux n'ont jamais
+// souffert de ce problème.
+
+// Choisie par mesure (voir le rapport de tâche) : au-dessus de la pente la
+// plus raide de la table (le flanc de Montmartre sous `routeSaintDenis`),
+// 8u tient l'écart |échantillon au milieu − hauteur aux extrémités| sous
+// ~1,44u (marge sous le seuil de vérification de ~1,5u) ; 9u dépasse déjà ce
+// seuil (~1,59u). Coût négligeable : ~830 segments au total pour les 12 axes
+// (contre ~560 à 12u), toujours plusieurs ordres de grandeur sous les
+// InstancedMesh de buildings.js.
+/** Distance maximale tolérée entre deux points consécutifs après subdivision. */
+export const ROAD_MAX_CHORD = 8;
+
+/**
+ * Insère des points intermédiaires le long d'une polyligne pour qu'aucune
+ * corde ne dépasse `maxChord` unités. Interpolation strictement linéaire
+ * (pas de bruit) : la forme du tracé ne change pas, seulement sa densité —
+ * pure et déterministe, donc testable sans three.js.
+ * @param {Array<{x:number,z:number}>} points
+ * @param {boolean} closed inclut la corde de fermeture (dernier -> premier point)
+ * @param {number} maxChord
+ * @returns {Array<{x:number,z:number}>}
+ */
+export function subdividePolyline(points, closed, maxChord) {
+  const n = points.length;
+  if (n < 2) return points.slice();
+  const edgeCount = closed ? n : n - 1;
+  const out = [points[0]];
+  for (let i = 0; i < edgeCount; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % n];
+    const dist = Math.hypot(b.x - a.x, b.z - a.z);
+    const steps = Math.max(1, Math.ceil(dist / maxChord));
+    const isClosingEdge = closed && i === edgeCount - 1;
+    for (let k = 1; k <= steps; k++) {
+      // Corde de fermeture : le dernier point vaut `points[0]`, déjà en tête
+      // de `out` — ne pas le dupliquer (polylineEdges le referme lui-même).
+      if (isClosingEdge && k === steps) break;
+      const t = k / steps;
+      out.push({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t });
+    }
+  }
+  return out;
+}
+
+// ============================================================================
 // Table des axes — exportée, testable sans three.js
 // ============================================================================
 //
@@ -331,7 +390,12 @@ function buildRoads(ctx) {
   let total = 0;
   for (const road of ROADS) {
     for (const points of roadPolylines(road)) {
-      const plan = wallRingPlan(points, { closed: !!road.closed, towerEvery: 0, gates: [] });
+      // Correctif critique n°1 (revue post-v1) : subdiviser avant de
+      // segmenter, sinon les longues cordes hand-authored font flotter/
+      // trancher le ruban dans le relief exagéré — voir le docstring de
+      // `subdividePolyline` ci-dessus.
+      const dense = subdividePolyline(points, !!road.closed, ROAD_MAX_CHORD);
+      const plan = wallRingPlan(dense, { closed: !!road.closed, towerEvery: 0, gates: [] });
       entries.push({ road, plan, offset: total, count: plan.segments.length });
       total += plan.segments.length;
     }

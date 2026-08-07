@@ -29,6 +29,7 @@
 import * as THREE from "three";
 import { heightAt, RINGS } from "./geography.js";
 import { lerp, smoothstep } from "./timeEngine.js";
+import { isFormControlTag } from "./ui.js";
 
 // ============================================================================
 // Tunables
@@ -44,6 +45,18 @@ const MAX_DISTANCE = Math.max(RINGS.peripherique.rx, RINGS.peripherique.rz) * 2 
 const MIN_ABOVE_GROUND = 4; // world units of clearance kept above terrain
 const PHI_MIN = 0.12; // ~7deg — avoid a straight-overhead gimbal-ish feel
 const PHI_MAX = 1.5; // ~86deg — avoid grazing the horizon / flipping under
+
+// Correctif revue post-v1 (critique n°2) : `clampAboveGround` only ever
+// tuned `phi` against `target.y`, which stayed permanently 0 (every preset's
+// target array is `[x, 0, z]`) — so at MIN_DISTANCE (18) the camera's max
+// height above the target was 18 world units, well under Montmartre's
+// clearance requirement (its ~33.7u peak + MIN_ABOVE_GROUND). Panning onto
+// the hill and zooming to min distance put the camera *inside* the terrain.
+// Fix: keep the target's height glued to the terrain directly under it —
+// see `elevateTargetY` below — so the camera (offset from an already-
+// elevated target) rides over hills instead of assuming they're flat.
+// `clampAboveGround`'s phi-tuning stays as the second line of defense.
+const TARGET_ELEVATE_RATE = 6; // exponential approach rate, per second
 
 const ORBIT_SPEED = 0.0055; // rad per pixel
 const PAN_SPEED = 0.0016; // world units per pixel per unit of radius
@@ -71,9 +84,14 @@ const DRIFT_YAW_RATE = (2 * Math.PI) / 180; // ~2deg/s, radians per second
 const TARGET_BOUNDS = { xMin: -2000, xMax: 1600, zMin: -2000, zMax: 2000 };
 
 export const PRESETS = {
-  // Reproduces main.js's original fixed establishing shot exactly, so the
-  // very first frame is unchanged: position (450,620,620), lookAt
-  // (-140,0,-80) => offset (590,620,700), radius ~1105.66.
+  // Reproduces main.js's original fixed establishing shot almost exactly —
+  // position (450,620,620), lookAt (-140,0,-80) => offset (590,620,700),
+  // radius ~1105.66. The `0` in `target` is a legacy y (kept here only so
+  // this table's shape stays [x,y,z]); `flyTo` no longer reads it — the
+  // camera factory glues `target.y` to `heightAt(target.x, target.z)`
+  // instead (correctif revue post-v1, critique n°2), so the very first
+  // frame lands ~2 world units off this exact value (noise-scale terrain
+  // under central Paris), imperceptible next to a radius of 1105.
   ensemble: { target: [-140, 0, -80], distance: 1105.66, theta: 0.69298, phi: 0.9755 },
   cite: { target: [0, 0, 0], distance: 80, theta: 0.69298, phi: 0.9755 },
   chezNous: { target: [-131, 0, -497], distance: 90, theta: 0.69298, phi: 0.9755 },
@@ -146,6 +164,26 @@ export function verticalOrbitDelta(dy, speed, invertVertical) {
   return (invertVertical ? -1 : 1) * dy * speed;
 }
 
+/**
+ * One smoothing step of the camera target's height toward the terrain
+ * height directly under it (correctif revue post-v1, critique n°2) —
+ * extracted as a pure function (no THREE/DOM) so the target-follow math is
+ * unit-testable on its own. `dt <= 0` means "no previous frame to lerp
+ * from" — used for instant placements (initial camera setup, a `flyTo` with
+ * `reducedMotion`/`duration<=0`) where the target must land at the right
+ * height immediately, not glide there over the next few frames.
+ * @param {number} currentY current `target.y`
+ * @param {number} desiredY `heightAt(target.x, target.z)` — terrain height under the target
+ * @param {number} dt seconds elapsed since the last call
+ * @param {number} [rate] exponential approach rate per second (higher = snappier)
+ * @returns {number} the new `target.y`
+ */
+export function elevateTargetY(currentY, desiredY, dt, rate = TARGET_ELEVATE_RATE) {
+  if (dt <= 0) return desiredY;
+  const factor = 1 - Math.exp(-rate * dt);
+  return lerp(currentY, desiredY, factor);
+}
+
 // ============================================================================
 // Controls factory
 // ============================================================================
@@ -212,11 +250,21 @@ export function createControls(camera, domElement, getState) {
     }
   }
 
-  function applyClamps() {
+  /**
+   * @param {number} [dt] seconds elapsed since the last call — 0 (default)
+   *   snaps `target.y` to the terrain immediately (instant placements);
+   *   a real per-frame dt glides it there smoothly instead.
+   */
+  function applyClamps(dt = 0) {
     radius = clamp(radius, MIN_DISTANCE, MAX_DISTANCE);
     phi = clamp(phi, PHI_MIN, PHI_MAX);
     target.x = clamp(target.x, TARGET_BOUNDS.xMin, TARGET_BOUNDS.xMax);
     target.z = clamp(target.z, TARGET_BOUNDS.zMin, TARGET_BOUNDS.zMax);
+    // Critique n°2 : garde `target.y` collé au relief sous lui, AVANT le
+    // clamp phi ci-dessous — qui reste la deuxième ligne de défense pour les
+    // cas résiduels (ex. le sol sous la CAMÉRA, décalée du target, plus haut
+    // que sous le target lui-même).
+    target.y = elevateTargetY(target.y, heightAt(target.x, target.z), dt);
     clampAboveGround();
   }
 
@@ -326,7 +374,7 @@ export function createControls(camera, domElement, getState) {
         // stays natural (tablets shouldn't feel flipped).
         orbitBy(dx, dy, dt, dragPointerType === "mouse");
       }
-      applyClamps();
+      applyClamps(dt);
       applyToCamera();
     } else if (pointers.size === 2) {
       pointers.set(e.pointerId, { x: curX, y: curY });
@@ -341,7 +389,7 @@ export function createControls(camera, domElement, getState) {
         velRadius = 0; // pinch is direct-manipulation, no zoom inertia
       }
       lastPinch = { dist, midX, midY };
-      applyClamps();
+      applyClamps(dt);
       applyToCamera();
     } else {
       pointers.set(e.pointerId, { x: curX, y: curY });
@@ -403,6 +451,11 @@ export function createControls(camera, domElement, getState) {
 
   function onKeyDown(e) {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // Correctif revue post-v1 (important n°3) : un curseur (le volume 🔈/🔊)
+    // ou tout autre contrôle de formulaire focus doit garder ZQSD/WASD pour
+    // lui — sinon taper D pendant qu'on règle le volume au clavier pan aussi
+    // la caméra en plus de faire avancer le curseur.
+    if (isFormControlTag(e.target && e.target.tagName)) return;
     const dir = keyFromCode(e.code);
     if (!dir) return;
     if (!keys[dir]) {
@@ -449,7 +502,13 @@ export function createControls(camera, domElement, getState) {
     idleTime = 0;
     const reduced = getState().reducedMotion;
     if (reduced || duration <= 0) {
-      target.set(preset.target[0], preset.target[1], preset.target[2]);
+      // Correctif revue post-v1 (critique n°2) : `target.y` n'est plus pris
+      // du preset (toujours 0 dans `PRESETS`, une donnée jamais mise à jour
+      // pour le relief) — `applyClamps()` ci-dessous le recale sur
+      // `heightAt` juste après, avec `dt` par défaut (0) donc un snap
+      // immédiat, cohérent avec le reste de cette branche "instantanée".
+      target.x = preset.target[0];
+      target.z = preset.target[2];
       radius = preset.distance;
       if (typeof preset.theta === "number") theta = preset.theta;
       if (typeof preset.phi === "number") phi = preset.phi;
@@ -459,8 +518,8 @@ export function createControls(camera, domElement, getState) {
       return;
     }
     flight = {
-      fromTarget: target.clone(),
-      toTarget: new THREE.Vector3(preset.target[0], preset.target[1], preset.target[2]),
+      fromTarget: { x: target.x, z: target.z },
+      toTarget: { x: preset.target[0], z: preset.target[2] },
       fromRadius: radius,
       toRadius: preset.distance,
       duration: duration / 1000,
@@ -481,7 +540,7 @@ export function createControls(camera, domElement, getState) {
       const { dx, dz } = panVectorFromKeys(keys, theta, dt, radius);
       target.x += dx;
       target.z += dz;
-      applyClamps();
+      applyClamps(dt);
       applyToCamera();
       idleTime = 0;
       return;
@@ -491,9 +550,15 @@ export function createControls(camera, domElement, getState) {
       flight.elapsed += dt;
       const t = clamp(flight.elapsed / flight.duration, 0, 1);
       const eased = smoothstep(t);
-      target.lerpVectors(flight.fromTarget, flight.toTarget, eased);
+      // Seuls x/z suivent le preset — `applyClamps(dt)` ci-dessous fait
+      // glisser `target.y` sur le relief sous la position interpolée à
+      // chaque frame du vol (critique n°2) : la caméra épouse les collines
+      // qu'elle traverse plutôt que de sauter à la fin sur une hauteur
+      // figée à 0 comme avant ce correctif.
+      target.x = lerp(flight.fromTarget.x, flight.toTarget.x, eased);
+      target.z = lerp(flight.fromTarget.z, flight.toTarget.z, eased);
       radius = lerp(flight.fromRadius, flight.toRadius, eased);
-      applyClamps();
+      applyClamps(dt);
       applyToCamera();
       if (t >= 1) flight = null;
       idleTime = 0;
@@ -524,7 +589,7 @@ export function createControls(camera, domElement, getState) {
       velRadius *= decay;
       velPan.multiplyScalar(decay);
 
-      applyClamps();
+      applyClamps(dt);
       applyToCamera();
       return;
     }
@@ -536,7 +601,7 @@ export function createControls(camera, domElement, getState) {
     idleTime += dt;
     if (idleTime < DRIFT_IDLE_DELAY) return;
     theta += DRIFT_YAW_RATE * dt;
-    applyClamps();
+    applyClamps(dt);
     applyToCamera();
   }
 
@@ -563,7 +628,8 @@ export function createControls(camera, domElement, getState) {
     window.removeEventListener("keyup", onKeyUp);
   }
 
-  // Initial placement (matches the original fixed camera exactly).
+  // Initial placement (matches the original fixed camera, modulo the
+  // terrain-follow snap on target.y — see PRESETS.ensemble's comment above).
   applyClamps();
   applyToCamera();
 

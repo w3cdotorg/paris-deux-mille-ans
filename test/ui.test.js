@@ -1,6 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shouldSpaceTogglePlayback, formatYear } from "../src/ui.js";
+import { shouldSpaceTogglePlayback, isFormControlTag, formatYear } from "../src/ui.js";
+
+// ============================================================================
+// isFormControlTag — correctif revue post-v1, important n°3 (prédicat
+// partagé : ZQSD dans controls.js, flèches ± années dans main.js, Espace ici)
+// ============================================================================
+
+test("isFormControlTag : INPUT/TEXTAREA/SELECT sont des contrôles de formulaire", () => {
+  assert.equal(isFormControlTag("INPUT"), true);
+  assert.equal(isFormControlTag("TEXTAREA"), true);
+  assert.equal(isFormControlTag("SELECT"), true);
+});
+
+test("isFormControlTag : BUTTON, BODY, autre, vide/undefined -> pas un contrôle de formulaire", () => {
+  assert.equal(isFormControlTag("BUTTON"), false);
+  assert.equal(isFormControlTag("BODY"), false);
+  assert.equal(isFormControlTag(""), false);
+  assert.equal(isFormControlTag(undefined), false);
+});
 
 // ============================================================================
 // shouldSpaceTogglePlayback — correctif revue tâche 16 (barre d'espace)
