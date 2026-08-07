@@ -44,6 +44,25 @@ export function formatYear(year) {
   return y < 0 ? `${Math.abs(y)} av. J.-C.` : `${y}`;
 }
 
+/**
+ * Tâche 16 (correctif revue) : la barre d'espace ne doit toggler la lecture
+ * automatique que si le focus n'est PAS sur un autre bouton — sinon un
+ * utilisateur clavier qui tabule jusqu'à 🔊/☀️/⚙️/une icône de la frise et
+ * appuie sur espace se ferait voler l'activation native de CE bouton (on
+ * faisait déjà `preventDefault()` sans regarder `event.target`). Le bouton
+ * ▶️/⏸ lui-même reste une exception assumée : sans elle, la même pression
+ * activerait à la fois notre dispatch explicite ET le clic natif simulé par
+ * le navigateur, pour un double toggle. Pure — testable sans DOM.
+ * @param {string} targetTagName tagName (MAJUSCULES, comme le DOM le fournit)
+ *   de `event.target` ou de son plus proche `<button>` ancêtre
+ * @param {boolean} isPlayBtn vrai si cet élément est le bouton ▶️/⏸ lui-même
+ * @returns {boolean}
+ */
+export function shouldSpaceTogglePlayback(targetTagName, isPlayBtn) {
+  if (isPlayBtn) return true;
+  return targetTagName !== "BUTTON";
+}
+
 // ============================================================================
 // Module state — DOM refs + tiny caches so DOM writes only happen on actual
 // change ("UI updates throttled to actual changes").
@@ -336,11 +355,18 @@ function buildDOM() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closePopovers();
     // Tâche 16 : la barre d'espace toggle ▶️/⏸, comme le bouton lui-même —
-    // preventDefault avant tout : sinon, un focus resté sur playBtn ferait
-    // grincer le navigateur qui simule *aussi* un clic natif sur le bouton
-    // focus au relâchement de la barre (double toggle), en plus du scroll de
-    // page que la barre d'espace déclenche par défaut.
+    // mais seulement si le focus n'est pas déjà sur un AUTRE bouton (🔊/☀️/
+    // ⚙️/icône de la frise/popover...), auquel cas on laisse l'activation
+    // native de CE bouton se produire (voir shouldSpaceTogglePlayback).
     if (e.code === "Space" || e.key === " ") {
+      const focusedBtn = e.target && e.target.closest ? e.target.closest("button") : null;
+      const tagName = focusedBtn ? focusedBtn.tagName : (e.target && e.target.tagName) || "";
+      if (!shouldSpaceTogglePlayback(tagName, focusedBtn === playBtn)) return;
+      // preventDefault seulement dans les cas où ON gère l'espace nous-mêmes :
+      // sinon, un focus resté sur playBtn ferait grincer le navigateur qui
+      // simule *aussi* un clic natif sur le bouton focus au relâchement de la
+      // barre (double toggle), en plus du scroll de page que la barre
+      // d'espace déclenche par défaut quand rien n'est focus.
       e.preventDefault();
       bus.dispatchEvent(new CustomEvent("playtoggle"));
     }
