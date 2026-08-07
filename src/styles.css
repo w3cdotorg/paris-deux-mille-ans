@@ -385,6 +385,89 @@
   pointer-events: auto;
 }
 
+/* Tâche 16 : bouton ▶️ Lecture + molettes de vitesse, à gauche de la frise. */
+
+.pdma-timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.pdma-timeline-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pdma-play-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.pdma-play-btn {
+  width: 68px;
+  height: 68px;
+  min-width: 60px;
+  min-height: 60px;
+  font-size: 30px;
+  box-shadow: var(--pdma-glass-shadow), 0 0 0 3px rgba(255, 180, 84, 0.18);
+}
+
+.pdma-play-btn.pdma-pressed {
+  background: linear-gradient(160deg, rgba(255, 180, 84, 0.45), rgba(255, 123, 84, 0.32));
+  border-color: rgba(255, 210, 140, 0.95);
+  box-shadow: 0 0 0 3px rgba(255, 180, 84, 0.28), var(--pdma-glass-shadow);
+}
+
+.pdma-speed-chips {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 10px);
+  /* Ancré au bord gauche du bouton (pas centré) : le bouton ▶️ est tout
+     contre le bord gauche de l'écran (proéminent "à gauche de la frise"), et
+     un popover centré sur lui déborderait hors du viewport côté gauche. */
+  left: 0;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 999px;
+  background: var(--pdma-glass-bg);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  border: 1px solid var(--pdma-glass-border);
+  box-shadow: var(--pdma-glass-shadow);
+  white-space: nowrap;
+}
+
+.pdma-speed-chips.pdma-open {
+  display: flex;
+}
+
+.pdma-chip {
+  min-width: 44px;
+  min-height: 36px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--pdma-cream);
+  font-family: "Baloo 2", sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.pdma-chip:hover {
+  background: rgba(255, 180, 84, 0.22);
+}
+
+.pdma-chip:active {
+  transform: scale(0.94);
+}
+
+.pdma-chip.pdma-pressed {
+  background: linear-gradient(160deg, rgba(255, 180, 84, 0.5), rgba(255, 123, 84, 0.35));
+}
+
 .pdma-year-display {
   text-align: center;
   font-family: "Fredoka", sans-serif;
@@ -520,13 +603,38 @@
   z-index: 1; /* sits behind the moment icons so it rings, not hides, one */
 }
 
+/* Tâche 16 : petit bouquet de fin sur l'icône 2026, une fois le voyage
+   automatique arrivé au bout (voir ui.js, écouteur "playfinished"). */
+.pdma-moment-btn.pdma-finish-pulse {
+  animation: pdma-finish-pulse-anim 0.7s ease;
+}
+
+@keyframes pdma-finish-pulse-anim {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 180, 84, 0.65);
+  }
+  40% {
+    transform: translate(-50%, -50%) scale(1.4);
+    box-shadow: 0 0 0 16px rgba(255, 180, 84, 0);
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 180, 84, 0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pdma-moment-btn.pdma-active {
     animation: none;
   }
+  .pdma-moment-btn.pdma-finish-pulse {
+    animation: none;
+  }
   .pdma-icon-btn,
   .pdma-moment-btn,
-  .pdma-popover-btn {
+  .pdma-popover-btn,
+  .pdma-chip {
     transition: none;
   }
 }
@@ -536,6 +644,16 @@
     width: 48px;
     height: 48px;
     font-size: 21px;
+  }
+  .pdma-play-btn {
+    width: 56px;
+    height: 56px;
+    min-width: 52px;
+    min-height: 52px;
+    font-size: 24px;
+  }
+  .pdma-timeline-row {
+    gap: 8px;
   }
   .pdma-buttons-row {
     top: 12px;

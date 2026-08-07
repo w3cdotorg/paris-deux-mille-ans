@@ -63,6 +63,11 @@ let lastShowLandmarks = null;
 let lastVoice = null;
 let lastSound = null;
 let lastQualityTier = null;
+let lastPlaying = null;
+let lastPlaySpeed = null;
+
+/** Vitesses proposées par les molettes autour du bouton ▶️ (tâche 16). */
+const SPEED_OPTIONS = [0.5, 1, 2];
 
 // ============================================================================
 // DOM construction
@@ -204,10 +209,50 @@ function buildDOM() {
   const timeline = document.createElement("div");
   timeline.className = "pdma-timeline";
 
+  const timelineRow = document.createElement("div");
+  timelineRow.className = "pdma-timeline-row";
+
+  // Tâche 16 : bouton ▶️ Lecture, proéminent à gauche de la frise — "regarder
+  // le film" : 2300 ans défilent seuls, la carte-récit de narration.js les
+  // ponctue naturellement (elle ne fait que suivre state.year, qui avance
+  // tout seul pendant la lecture — voir main.js). Molettes de vitesse
+  // révélées juste au-dessus du bouton pendant la lecture.
+  const playWrap = document.createElement("div");
+  playWrap.className = "pdma-play-wrap";
+  const playBtn = createIconButton("▶️", "Lecture : le voyage automatique (espace)", "pdma-play-btn");
+  playBtn.addEventListener("click", () => {
+    bus.dispatchEvent(new CustomEvent("playtoggle"));
+  });
+
+  const speedChips = document.createElement("div");
+  speedChips.className = "pdma-speed-chips";
+  speedChips.setAttribute("role", "group");
+  speedChips.setAttribute("aria-label", "Vitesse de lecture");
+  const speedButtons = SPEED_OPTIONS.map((speed) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "pdma-chip";
+    chip.textContent = `×${String(speed).replace(".", ",")}`;
+    chip.setAttribute("aria-label", `Vitesse ×${speed}`);
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      bus.dispatchEvent(new CustomEvent("speedchange", { detail: { speed } }));
+    });
+    speedChips.appendChild(chip);
+    return { speed, btn: chip };
+  });
+
+  playWrap.appendChild(playBtn);
+  playWrap.appendChild(speedChips);
+  timelineRow.appendChild(playWrap);
+
+  const timelineMain = document.createElement("div");
+  timelineMain.className = "pdma-timeline-main";
+
   const yearDisplay = document.createElement("div");
   yearDisplay.className = "pdma-year-display";
   yearDisplay.setAttribute("aria-live", "polite");
-  timeline.appendChild(yearDisplay);
+  timelineMain.appendChild(yearDisplay);
 
   const track = document.createElement("div");
   track.className = "pdma-track";
@@ -240,7 +285,9 @@ function buildDOM() {
   handle.setAttribute("aria-hidden", "true");
   track.appendChild(handle);
 
-  timeline.appendChild(track);
+  timelineMain.appendChild(track);
+  timelineRow.appendChild(timelineMain);
+  timeline.appendChild(timelineRow);
   root.appendChild(timeline);
 
   document.body.appendChild(root);
@@ -288,6 +335,29 @@ function buildDOM() {
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closePopovers();
+    // Tâche 16 : la barre d'espace toggle ▶️/⏸, comme le bouton lui-même —
+    // preventDefault avant tout : sinon, un focus resté sur playBtn ferait
+    // grincer le navigateur qui simule *aussi* un clic natif sur le bouton
+    // focus au relâchement de la barre (double toggle), en plus du scroll de
+    // page que la barre d'espace déclenche par défaut.
+    if (e.code === "Space" || e.key === " ") {
+      e.preventDefault();
+      bus.dispatchEvent(new CustomEvent("playtoggle"));
+    }
+  });
+
+  // Tâche 16 : petit bouquet de fin — main.js prévient via cet événement
+  // (plutôt que de fouiller dans `state`) une fois le voyage arrivé à 2026 ;
+  // ui.js est le seul à connaître dom.momentButtons, donc le seul qui peut
+  // jouer l'animation.
+  bus.addEventListener("playfinished", () => {
+    if (currentState && currentState.reducedMotion) return;
+    const last = momentButtons[momentButtons.length - 1];
+    last.classList.remove("pdma-finish-pulse");
+    // Force un reflow pour pouvoir rejouer l'animation même si elle vient de tourner.
+    // eslint-disable-next-line no-unused-expressions
+    last.offsetWidth;
+    last.classList.add("pdma-finish-pulse");
   });
 
   return {
@@ -303,6 +373,9 @@ function buildDOM() {
     landmarksBtn,
     weatherBtn,
     qualityPopover,
+    playBtn,
+    speedChips,
+    speedButtons,
   };
 }
 
@@ -336,6 +409,17 @@ export function flyToYear(toYear, duration = 2000) {
     elapsed: 0,
     duration: duration / 1000,
   };
+}
+
+/**
+ * Annule un vol en cours (`flyToYear`) sans changer l'année. Tâche 16 :
+ * main.js l'appelle juste avant de démarrer la lecture automatique, pour le
+ * cas marginal où l'utilisateur aurait tapé une icône de la frise (vol de
+ * ~2s en cours) puis, dans la même seconde, tapé ▶️ — sans ça, les deux
+ * mécanismes écriraient state.year au même moment.
+ */
+export function stopTween() {
+  tween = null;
 }
 
 // ============================================================================
@@ -407,6 +491,23 @@ function syncFromState(state) {
     const buttons = dom.qualityPopover.querySelectorAll(".pdma-popover-btn");
     buttons.forEach((btn, i) => btn.classList.toggle("pdma-pressed", i === idx));
   }
+
+  // Tâche 16 : ▶️/⏸ + molettes de vitesse révélées pendant la lecture.
+  if (state.playing !== lastPlaying) {
+    lastPlaying = state.playing;
+    dom.playBtn.textContent = state.playing ? "⏸" : "▶️";
+    const label = state.playing
+      ? "Mettre en pause le voyage automatique (espace)"
+      : "Lecture : le voyage automatique (espace)";
+    dom.playBtn.setAttribute("aria-label", label);
+    dom.playBtn.title = label;
+    dom.playBtn.classList.toggle("pdma-pressed", state.playing);
+    dom.speedChips.classList.toggle("pdma-open", state.playing);
+  }
+  if (state.playSpeed !== lastPlaySpeed) {
+    lastPlaySpeed = state.playSpeed;
+    dom.speedButtons.forEach(({ speed, btn }) => btn.classList.toggle("pdma-pressed", speed === state.playSpeed));
+  }
 }
 
 // ============================================================================
@@ -425,6 +526,8 @@ export function init(state) {
   lastVoice = null;
   lastSound = null;
   lastQualityTier = null;
+  lastPlaying = null;
+  lastPlaySpeed = null;
   syncFromState(state);
 }
 

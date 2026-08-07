@@ -45,6 +45,13 @@ const PINCH_ZOOM_SPEED = 0.01; // fraction of radius per pixel of pinch delta
 const INERTIA_DECAY = 5.5; // exponential decay rate (per second)
 const INERTIA_STOP_EPS = 1e-4;
 
+// Cinematic idle drift (task 16, "▶️ Lecture") — a slow yaw orbit that kicks
+// in only once the user hasn't touched the camera for a while, so playback
+// still looks "alive" during a long hold at a moment card without wrestling
+// control away from a user who's actively looking around.
+const DRIFT_IDLE_DELAY = 10; // seconds of no pointer/wheel/flight before drift starts
+const DRIFT_YAW_RATE = (2 * Math.PI) / 180; // ~2deg/s, radians per second
+
 // Loose world-space leash on the pan target so a long drag can't wander off
 // into the void past the terrain's own extent (see layers/terrain.js).
 const TARGET_BOUNDS = { xMin: -2000, xMax: 1600, zMin: -2000, zMax: 2000 };
@@ -89,6 +96,13 @@ export function createControls(camera, domElement, getState) {
   let lastMoveTime = 0;
 
   let flight = null; // {fromTarget, toTarget, fromRadius, toRadius, elapsed, duration}
+
+  // Idle drift (see DRIFT_* above): armed by main.js while playback (task 16)
+  // is running, disarmed the instant it pauses/stops or the user touches the
+  // camera. `idleTime` only accumulates once nothing else is moving the
+  // camera (no flight, no pointer down, no inertia still settling).
+  let driftArmed = false;
+  let idleTime = 0;
 
   const _pos = new THREE.Vector3();
 
@@ -188,6 +202,7 @@ export function createControls(camera, domElement, getState) {
   function onPointerDown(e) {
     if (flight) cancelFlight();
     stopInertia();
+    idleTime = 0; // any touch resets the "hasn't touched the camera" clock
     try {
       domElement.setPointerCapture(e.pointerId);
     } catch {
@@ -264,6 +279,7 @@ export function createControls(camera, domElement, getState) {
     e.preventDefault();
     if (flight) cancelFlight();
     stopInertia();
+    idleTime = 0;
     zoomBy(e.deltaY * WHEEL_ZOOM_SPEED);
     applyClamps();
     applyToCamera();
@@ -297,6 +313,7 @@ export function createControls(camera, domElement, getState) {
     const preset = resolvePreset(nameOrPreset);
     if (!preset) return;
     stopInertia();
+    idleTime = 0;
     const reduced = getState().reducedMotion;
     if (reduced || duration <= 0) {
       target.set(preset.target[0], preset.target[1], preset.target[2]);
@@ -332,32 +349,60 @@ export function createControls(camera, domElement, getState) {
       applyClamps();
       applyToCamera();
       if (t >= 1) flight = null;
+      idleTime = 0;
       return;
     }
 
-    if (pointers.size > 0) return; // direct manipulation in progress
+    if (pointers.size > 0) {
+      idleTime = 0; // direct manipulation in progress
+      return;
+    }
 
     const anyVelocity =
       Math.abs(velTheta) > INERTIA_STOP_EPS ||
       Math.abs(velPhi) > INERTIA_STOP_EPS ||
       Math.abs(velRadius) > INERTIA_STOP_EPS ||
       velPan.lengthSq() > INERTIA_STOP_EPS;
-    if (!anyVelocity) return;
+    if (anyVelocity) {
+      idleTime = 0; // still settling from a fling — not idle yet
+      const decay = Math.exp(-INERTIA_DECAY * dt);
+      theta += velTheta * dt;
+      phi = clamp(phi + velPhi * dt, PHI_MIN, PHI_MAX);
+      radius = clamp(radius + velRadius * dt, MIN_DISTANCE, MAX_DISTANCE);
+      target.x += velPan.x * dt;
+      target.z += velPan.y * dt;
 
-    const decay = Math.exp(-INERTIA_DECAY * dt);
-    theta += velTheta * dt;
-    phi = clamp(phi + velPhi * dt, PHI_MIN, PHI_MAX);
-    radius = clamp(radius + velRadius * dt, MIN_DISTANCE, MAX_DISTANCE);
-    target.x += velPan.x * dt;
-    target.z += velPan.y * dt;
+      velTheta *= decay;
+      velPhi *= decay;
+      velRadius *= decay;
+      velPan.multiplyScalar(decay);
 
-    velTheta *= decay;
-    velPhi *= decay;
-    velRadius *= decay;
-    velPan.multiplyScalar(decay);
+      applyClamps();
+      applyToCamera();
+      return;
+    }
 
+    // Truly idle: no flight, no pointer down, no inertia left to settle.
+    // Drift only runs while armed (main.js arms it exactly while playback is
+    // running) and never under reducedMotion.
+    if (!driftArmed || getState().reducedMotion) return;
+    idleTime += dt;
+    if (idleTime < DRIFT_IDLE_DELAY) return;
+    theta += DRIFT_YAW_RATE * dt;
     applyClamps();
     applyToCamera();
+  }
+
+  /**
+   * Arms/disarms the idle cinematic drift (task 16). Disarming also resets
+   * the idle clock so re-arming later always waits a fresh DRIFT_IDLE_DELAY,
+   * rather than drifting immediately because the user happened to already
+   * be idle before playback started.
+   * @param {boolean} enabled
+   */
+  function setDrift(enabled) {
+    driftArmed = enabled;
+    idleTime = 0;
   }
 
   function dispose() {
@@ -373,5 +418,13 @@ export function createControls(camera, domElement, getState) {
   applyClamps();
   applyToCamera();
 
-  return { update, flyTo, dispose, get target() { return target.clone(); } };
+  return {
+    update,
+    flyTo,
+    dispose,
+    setDrift,
+    get target() {
+      return target.clone();
+    },
+  };
 }

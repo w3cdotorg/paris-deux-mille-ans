@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { YEAR_MIN, YEAR_MAX } from "./timeline.js";
+import { MOMENTS, YEAR_MIN, YEAR_MAX } from "./timeline.js";
+import { sliderToYear } from "./timeEngine.js";
 import * as weather from "./layers/weather.js";
 import * as terrain from "./layers/terrain.js";
 import * as buildings from "./layers/buildings.js";
@@ -11,6 +12,7 @@ import * as ghosts from "./layers/ghosts.js";
 import { createControls } from "./controls.js";
 import * as ui from "./ui.js";
 import * as narration from "./narration.js";
+import { createPlayback } from "./play.js";
 
 const canvas = document.querySelector("#scene");
 
@@ -32,7 +34,7 @@ const camera = new THREE.PerspectiveCamera(
   4000
 );
 
-/** @type {{year:number, weather:string, showLandmarks:boolean, voice:boolean, sound:boolean, qualityTier:string, reducedMotion:boolean, time:number}} */
+/** @type {{year:number, weather:string, showLandmarks:boolean, voice:boolean, sound:boolean, qualityTier:string, reducedMotion:boolean, time:number, playing:boolean, playSpeed:number}} */
 const state = {
   year: 2026,
   weather: "sun",
@@ -42,6 +44,13 @@ const state = {
   qualityTier: "haut",
   reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   time: 0,
+  // Tâche 16 — ▶️ Lecture : "playing" et "playSpeed" ne sont mutés qu'ici
+  // (voir advancePlayback et les écouteurs "playtoggle"/"speedchange"
+  // ci-dessous) ; ui.js ne fait que les refléter sur le bouton et les
+  // molettes de vitesse (même invariant que le reste de state — voir le
+  // docstring de ui.js).
+  playing: false,
+  playSpeed: 1,
 };
 
 const quality = { crowds: 1, trees: 1, rain: 1, boats: 1, shadows: 1, windows: 1 };
@@ -82,6 +91,52 @@ const controls = createControls(camera, canvas, () => state);
 // init/update contract as the scene layers above, but drives the DOM.
 ui.init(state);
 
+// Tâche 16 — ▶️ Lecture : "regarder le film". `playback` (src/play.js) est
+// une pure machine à état en u∈[0,1] (la même unité que la frise) ; ce
+// fichier est le seul à la faire avancer (`advancePlayback`, appelée depuis
+// la boucle animate() ci-dessous) et à reconvertir u en année via
+// `sliderToYear` — exactement comme ui.js le fait déjà pour son propre
+// tween de vol d'icône, mais ici piloté par le temps plutôt que par une
+// destination fixe.
+const YEAR_ANCHORS = MOMENTS.map((m) => m.year);
+const playback = createPlayback({ totalSeconds: 105, pauseSeconds: 4 });
+
+function hasSpeechSpeaking() {
+  return typeof window !== "undefined" && !!window.speechSynthesis && window.speechSynthesis.speaking;
+}
+
+/**
+ * Fait avancer la lecture automatique de `dt` secondes (sans effet si
+ * `state.playing` est faux). Factorisée hors de `animate()` pour que
+ * `window.__paris.playback.tick` (vérification Playwright — driver la
+ * lecture plus vite que le temps réel sans dépendre d'un vrai
+ * requestAnimationFrame) partage exactement le même chemin que la boucle
+ * réelle.
+ * @param {number} dt secondes
+ * @returns {{u:number, phase:string, holdRemaining:number}|null}
+ */
+function advancePlayback(dt) {
+  if (!state.playing) return null;
+  const result = playback.tick(dt);
+  state.year = Math.max(YEAR_MIN, Math.min(YEAR_MAX, sliderToYear(result.u, YEAR_ANCHORS)));
+  // Pendant une pause à une ancre, si la voix (state.voice) est encore en
+  // train de lire la carte, on prolonge la pause d'au moins 1s à chaque
+  // frame tant qu'elle parle — extendHold plafonne lui-même à 12s au total
+  // (voir play.js), donc cette relance ne peut jamais dépasser le plafond
+  // même si la voix continue plus longtemps.
+  if (result.phase === "holding" && state.voice && hasSpeechSpeaking()) {
+    playback.extendHold(1);
+  }
+  if (result.phase === "done") {
+    state.playing = false;
+    controls.setDrift(false);
+    // Petit bouquet de fin sur l'icône 2026 : voir ui.js, écouteur
+    // "playfinished" (ui.js est seul à connaître dom.momentButtons).
+    ui.bus.dispatchEvent(new CustomEvent("playfinished"));
+  }
+  return result;
+}
+
 // Narration (Task 15) — cartes-récits, voix, monuments cliquables, compteur.
 // Not part of the `layers` array above: unlike the scene layers, it needs the
 // DOM (canvas for tap/raycast, #pdma-ui for the card/counter/label) and the
@@ -100,12 +155,42 @@ ui.bus.addEventListener("yearchange", (event) => {
   // pointermove. window.__paris.setYear (below) is the separate, deliberately
   // un-throttled path for single automated calls.
   state.year = Math.max(YEAR_MIN, Math.min(YEAR_MAX, event.detail.year));
+  // Tâche 16 : ce bus event ne vient jamais de la lecture automatique
+  // elle-même (advancePlayback écrit state.year directement, sans passer
+  // par le bus) — il ne peut venir que d'un drag de la frise, d'un tap sur
+  // une icône (flyToYear) ou des flèches clavier : dans les trois cas,
+  // "l'utilisateur reprend la main", donc on met en pause (pause()/false
+  // sont sans effet si la lecture ne tournait déjà pas — voir play.js).
+  state.playing = false;
+  playback.pause();
+  controls.setDrift(false);
 });
 ui.bus.addEventListener("weatherchange", (event) => {
   state.weather = event.detail.weather;
 });
 ui.bus.addEventListener("preset", (event) => {
   controls.flyTo(event.detail.name);
+});
+ui.bus.addEventListener("playtoggle", () => {
+  if (state.playing) {
+    state.playing = false;
+    playback.pause();
+    controls.setDrift(false);
+    return;
+  }
+  // Annule un éventuel vol d'icône en cours (voir stopTween's docstring) :
+  // sans lien avec la lecture automatique elle-même, juste un garde-fou
+  // pour ne jamais avoir deux mécanismes qui écrivent state.year le même
+  // instant.
+  ui.stopTween();
+  playback.setSpeed(state.playSpeed);
+  playback.play();
+  state.playing = true;
+  controls.setDrift(true);
+});
+ui.bus.addEventListener("speedchange", (event) => {
+  state.playSpeed = event.detail.speed;
+  playback.setSpeed(state.playSpeed);
 });
 ui.bus.addEventListener("voicechange", (event) => {
   state.voice = event.detail.enabled;
@@ -140,8 +225,17 @@ window.addEventListener("keydown", (event) => {
     // by terrain's per-frame debounced rescan — never an immediate forced
     // rescan on every keypress.
     state.year = Math.max(YEAR_MIN, Math.min(YEAR_MAX, state.year + YEAR_STEP));
+    // Tâche 16 : cette voie ne passe pas par le bus (contrairement au drag
+    // de la frise) — même intention "l'utilisateur reprend la main", donc
+    // même mise en pause explicite ici.
+    state.playing = false;
+    playback.pause();
+    controls.setDrift(false);
   } else if (event.key === "ArrowLeft") {
     state.year = Math.max(YEAR_MIN, Math.min(YEAR_MAX, state.year - YEAR_STEP));
+    state.playing = false;
+    playback.pause();
+    controls.setDrift(false);
   } else if (PRESET_KEYS[event.key]) {
     controls.flyTo(PRESET_KEYS[event.key]);
   }
@@ -229,6 +323,23 @@ window.__paris = {
     state: () => narration.debugState(),
     voices: () => narration.debugVoices(),
   },
+  // Tâche 16 — ▶️ Lecture : le voyage automatique. `tick(dt)` appelle le
+  // même chemin que la boucle animate() (`advancePlayback`), ce qui permet
+  // à Playwright de driver tout le voyage avec des `dt` programmatiques
+  // (ex. 2s à la fois, à ×2) plutôt que d'attendre ~80s de temps réel.
+  playback: {
+    state: () => ({
+      playing: state.playing,
+      speed: state.playSpeed,
+      u: playback.u,
+      phase: playback.phase,
+      holdRemaining: playback.holdRemaining,
+      holdCount: playback.holdCount,
+    }),
+    toggle: () => ui.bus.dispatchEvent(new CustomEvent("playtoggle")),
+    setSpeed: (speed) => ui.bus.dispatchEvent(new CustomEvent("speedchange", { detail: { speed } })),
+    tick: (dt) => advancePlayback(dt),
+  },
 };
 
 // --- Main loop --------------------------------------------------------------
@@ -244,6 +355,10 @@ function animate() {
     layer.update(dt, state);
   }
   controls.update(dt);
+  // Tâche 16 : après controls.update (le drift cinématique, s'il est armé,
+  // a déjà tourné pour cette frame) et avant ui.update (qui doit refléter
+  // l'année *déjà* avancée par la lecture, pas celle d'il y a une frame).
+  advancePlayback(dt);
   ui.update(dt, state);
   narration.update(dt, state);
 
