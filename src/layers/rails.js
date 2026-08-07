@@ -415,6 +415,12 @@ const pc = {
   trainBodies: null,
   trainChimneys: null,
   perimeter: 0,
+  // Correctif revue Tâche 11 ("updateTrains sans early-return reducedMotion") :
+  // même schéma que `peri.carsWritten` — sous reducedMotion, une position
+  // gelée réécrite identiquement à chaque frame n'est qu'un
+  // recalcul+re-upload GPU gratuits (TRAIN_COUNT trains × CARS_PER_TRAIN
+  // wagons). Remis à `false` à chaque rescan (voir `applyPetiteCeinture`).
+  trainsWritten: false,
 };
 
 /** Teinte de rouille cible, allouée une fois (le lerp de couleur est en place). */
@@ -550,6 +556,7 @@ function applyPetiteCeinture(year) {
   }
   pc.embankment.instanceMatrix.needsUpdate = true;
   pc.rails.instanceMatrix.needsUpdate = true;
+  pc.trainsWritten = false;
 
   // Les rails ternissent après le dernier train.
   const rust = clamp01((year - TRAIN_WINDOW.to) / 20);
@@ -612,6 +619,9 @@ function updateTrains(state, active) {
   }
   pc.trainBodies.visible = true;
   pc.trainChimneys.visible = true;
+  // Sous reducedMotion, la position (figée à time=0) ne change jamais entre
+  // deux rescans : une seule écriture suffit (même schéma que updateCars).
+  if (state.reducedMotion && pc.trainsWritten) return;
   const ring = PETITE_CEINTURE.ring;
   const time = state.reducedMotion ? 0 : state.time;
 
@@ -664,6 +674,7 @@ function updateTrains(state, active) {
   }
   pc.trainBodies.instanceMatrix.needsUpdate = true;
   pc.trainChimneys.instanceMatrix.needsUpdate = true;
+  pc.trainsWritten = true;
 }
 
 // ============================================================================

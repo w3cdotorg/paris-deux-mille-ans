@@ -16,6 +16,7 @@ import {
   init as initLife,
   update as updateLife,
   forceRescan as lifeForceRescan,
+  setQuality as setLifeQuality,
   debugCounts,
   stats,
 } from "../src/layers/life.js";
@@ -294,4 +295,42 @@ test("rendu : debugCounts reflète les vignettes actives à 1860 (fanions + fami
   d = debugCounts(1940);
   assert.ok(d.activeVignettes.includes(23));
   assert.ok(d.activeVignettes.includes(24));
+});
+
+// ============================================================================
+// setQuality (tâche 18) — foules et bateaux réagissent en cours de session
+// ============================================================================
+
+test("setQuality: baisser quality.crowds réduit la foule active pour l'année déjà affichée", () => {
+  const scene = new THREE.Scene();
+  const ctx = { scene, quality: { crowds: 1, boats: 1 } };
+  initLife(ctx);
+  lifeForceRescan(2026); // année à forte population : la baisse doit être mesurable
+  const before = debugCounts(2026).crowdActive;
+  assert.ok(before > 0, "aucune foule à 2026 avec crowds:1 ?");
+
+  ctx.quality.crowds = 0.3; // valeur du tier "léger"
+  setLifeQuality(ctx);
+  const after = debugCounts(2026).crowdActive;
+
+  assert.ok(after < before, `crowdActive: avant=${before} après=${after}`);
+});
+
+test("setQuality: baisser quality.boats cache une partie des bateaux, mais reste appliqué de façon stable (pas de scintillement)", () => {
+  const scene = new THREE.Scene();
+  const ctx = { scene, quality: { crowds: 1, boats: 1 } };
+  initLife(ctx);
+  lifeForceRescan(1400); // fenêtre avec plusieurs flottes actives
+  updateLife(0, { year: 1400, time: 0, weather: "sun", reducedMotion: false });
+  const before = debugCounts(1400).visibleBoats;
+
+  ctx.quality.boats = 0.5; // valeur du tier "léger"
+  setLifeQuality(ctx);
+  updateLife(0, { year: 1400, time: 0, weather: "sun", reducedMotion: false });
+  const afterFirst = debugCounts(1400).visibleBoats;
+  updateLife(0.016, { year: 1400, time: 0.016, weather: "sun", reducedMotion: false });
+  const afterSecond = debugCounts(1400).visibleBoats;
+
+  assert.ok(afterFirst <= before, `visibleBoats: avant=${before} après=${afterFirst}`);
+  assert.equal(afterFirst, afterSecond, "le même réglage doit cacher exactement les mêmes bateaux d'une frame à l'autre");
 });

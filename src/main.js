@@ -14,6 +14,7 @@ import * as ui from "./ui.js";
 import * as narration from "./narration.js";
 import { createPlayback } from "./play.js";
 import * as audio from "./audio.js";
+import * as quality from "./quality.js";
 
 const canvas = document.querySelector("#scene");
 
@@ -42,7 +43,12 @@ const state = {
   showLandmarks: true,
   voice: false,
   sound: false,
-  qualityTier: "haut",
+  // Tâche 18 — qualité graphique : "auto" par défaut (voir quality.js) ;
+  // ui.js ne fait que refléter cette valeur sur le popover ⚙️ (4ᵉ chip
+  // "Auto" en plus des 3 tiers manuels) — c'est le seul champ de `state`
+  // qu'un module autre que main.js (quality.js, via son contrôleur) pilote
+  // indirectement, par le même chemin bus qu'un choix manuel.
+  qualityTier: "auto",
   reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   time: 0,
   // Tâche 16 — ▶️ Lecture : "playing" et "playSpeed" ne sont mutés qu'ici
@@ -54,8 +60,11 @@ const state = {
   playSpeed: 1,
 };
 
-const quality = { crowds: 1, trees: 1, rain: 1, boats: 1, shadows: 1, windows: 1 };
-const ctx = { scene, renderer, camera, quality };
+// Nommé `initialQuality` (pas `quality`, qui désigne le MODULE importé
+// ci-dessus — `import * as quality from "./quality.js"`) : valeurs de départ
+// identiques à `quality.TIERS.haut`, avant même que le contrôleur n'existe.
+const initialQuality = { crowds: 1, trees: 1, rain: 1, boats: 1, shadows: 1, windows: 1 };
+const ctx = { scene, renderer, camera, quality: initialQuality };
 
 // Layer registry: each module exports init(ctx) and update(dt, state).
 // weather en premier : c'est lui qui possède tout l'éclairage (hémisphérique,
@@ -82,6 +91,16 @@ const layers = [weather, terrain, buildings, walls, monuments, rails, life, ghos
 for (const layer of layers) {
   layer.init(ctx);
 }
+
+// Tâche 18 — qualité graphique : `ctx.quality` vaut déjà les multiplicateurs
+// du tier "haut" (voir sa définition plus haut, identique à
+// quality.TIERS.haut) — les couches ci-dessus les ont donc lus au bon niveau
+// dès leur propre init(), pas besoin d'appliquer un tier ici. Le contrôleur
+// n'a plus qu'à démarrer en mode auto, prêt à dégrader/remonter et à
+// rafraîchir terrain/life/weather (les 3 couches qui n'échantillonnent leurs
+// multiplicateurs qu'à l'init, sinon) à chaque décision — jamais les
+// monuments/murailles/repères/buildings, qui n'ont pas de bouton qualité.
+const qualityCtl = quality.createController(ctx, { terrain, life, weather }, "haut");
 
 // Custom orbit/pan/zoom controls (see controls.js) — sets the camera's
 // initial position to the `ensemble` preset, which exactly reproduces the
@@ -209,7 +228,17 @@ ui.bus.addEventListener("landmarkschange", (event) => {
   state.showLandmarks = event.detail.show;
 });
 ui.bus.addEventListener("qualitychange", (event) => {
-  state.qualityTier = event.detail.tier;
+  const tier = event.detail.tier;
+  state.qualityTier = tier;
+  // Tâche 18 : "auto" réactive le contrôleur (chip dédié dans ⚙️) ; les 3
+  // autres valeurs sont un choix manuel qui désactive l'auto pour la session
+  // (spec) — dans les deux cas c'est le contrôleur qui mute `ctx.quality` et
+  // rafraîchit terrain/life/weather, jamais ce listener directement.
+  if (tier === "auto") {
+    qualityCtl.enableAuto();
+  } else {
+    qualityCtl.setManualTier(tier);
+  }
 });
 
 function onResize() {
@@ -355,6 +384,27 @@ window.__paris = {
     setSpeed: (speed) => ui.bus.dispatchEvent(new CustomEvent("speedchange", { detail: { speed } })),
     tick: (dt) => advancePlayback(dt),
   },
+  // Tâche 18 — qualité graphique. `values()` lit `ctx.quality` en direct (les
+  // 5 multiplicateurs + `windows`, hors tiers — voir quality.js) ; `setTier`
+  // passe par le même bus event qu'un vrai clic ⚙️, donc exerce exactement le
+  // chemin de code réel (pas un raccourci qui court-circuiterait le
+  // rafraîchissement des couches). `feed(dt, frameMs)` nourrit l'auto avec des
+  // durées de frame *synthétiques* — le "busy-loop simulé" de la vérification
+  // Playwright n'a pas besoin de dépendre d'un vrai ralentissement mesurable
+  // par `performance.now()` dans l'environnement sandboxé (le brief note
+  // lui-même que ces mesures y sont bruitées) ; ça reste le même
+  // `qualityCtl.update` que la boucle `animate()` ci-dessous appelle chaque
+  // frame réelle, donc le même chemin de code, juste avec un `dt`/`frameMs`
+  // choisis plutôt que mesurés.
+  quality: {
+    tier: () => qualityCtl.getTier(),
+    mode: () => qualityCtl.getMode(),
+    isAuto: () => qualityCtl.isAuto(),
+    values: () => ({ ...ctx.quality }),
+    setTier: (tier) => ui.bus.dispatchEvent(new CustomEvent("qualitychange", { detail: { tier } })),
+    feed: (dt, frameMs) => qualityCtl.update(dt, frameMs),
+    terrainStats: () => terrain.stats(),
+  },
 };
 
 // --- Main loop --------------------------------------------------------------
@@ -365,6 +415,13 @@ let fpsLogAt = 0;
 function animate() {
   const dt = Math.min(clock.getDelta(), 0.1);
   state.time += dt;
+
+  // Tâche 18 — qualité graphique : nourrit l'auto de CETTE frame réelle
+  // (no-op si un tier manuel est actif — voir quality.js's createController).
+  // Avant les couches ci-dessous : si l'auto décide de changer de tier cette
+  // frame-là, terrain/life/weather sont rafraîchis avant même leur propre
+  // update() de cette même frame.
+  qualityCtl.update(dt, dt * 1000);
 
   for (const layer of layers) {
     layer.update(dt, state);

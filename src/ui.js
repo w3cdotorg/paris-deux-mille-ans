@@ -22,7 +22,12 @@ const ANCHORS = MOMENTS.map((m) => m.year);
 const WEATHER_CYCLE = ["sun", "overcast", "rain", "night"];
 const WEATHER_ICON = { sun: "☀️", overcast: "🌥️", rain: "🌧️", night: "🌙" };
 const WEATHER_LABEL = { sun: "soleil", overcast: "nuageux", rain: "pluie", night: "nuit" };
+// Tâche 18 : "Auto" est le réglage par défaut (state.qualityTier initial,
+// voir main.js) — placé en tête pour rester le premier item du popover ⚙️.
+// Choisir un des 3 tiers manuels désactive l'auto pour la session ; recliquer
+// "Auto" le réactive (voir quality.js's createController).
 const QUALITY_TIERS = [
+  { value: "auto", label: "Auto" },
   { value: "haut", label: "Haut" },
   { value: "moyen", label: "Moyen" },
   { value: "leger", label: "Léger" },

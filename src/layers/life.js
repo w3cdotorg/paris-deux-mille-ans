@@ -451,6 +451,13 @@ function buildBoats(ctx) {
         staticT,
         bobPhase: hash01(globalIdx, 4, 991) * Math.PI * 2,
         wheel: inner.userData.wheel ?? null,
+        // Tâche 18 — qualité graphique : rang stable dans [0,1), indépendant
+        // de la présence de flotte. `updateBoats` cache ce bateau dès que
+        // `qualityBoats` (ctx.quality.boats) tombe sous son rang — un tirage
+        // fixe par bateau (pas un sous-ensemble recalculé à chaque frame)
+        // pour qu'un même réglage cache toujours les MÊMES bateaux, jamais
+        // un scintillement d'un lot différent frame après frame.
+        qualityRank: hash01(globalIdx, 5, 1013),
       });
       globalIdx++;
     });
@@ -462,7 +469,7 @@ function updateBoats(state) {
   const time = state.reducedMotion ? 0 : state.time;
   for (const b of boats.instances) {
     const presence = fleetPresence(state.year, b.fleet.from, b.fleet.to, b.fleet.fadeIn, b.fleet.fadeOut);
-    if (presence <= 0.015) {
+    if (presence <= 0.015 || b.qualityRank >= qualityBoats) {
       if (b.group.visible) b.group.visible = false;
       continue;
     }
@@ -1229,11 +1236,16 @@ function updateVignettes(state) {
 // ============================================================================
 
 let lastAppliedYear = null;
-// `ctx.quality.crowds` est capturé une fois à l'init — même convention que
-// `terrain.js` (`buildForestCandidates(ctx.quality)`, lu seulement à l'init) :
-// `state` n'a pas de champ `quality` dans le contrat actuel de main.js, donc
-// aucun layer ne le relit à chaque rescan.
+// `ctx.quality.crowds`/`ctx.quality.boats` sont capturés dans ces deux
+// variables de module plutôt que relus depuis `ctx` à chaque frame — `state`
+// (le contrat de `update(dt, state)`) n'a pas de champ `quality`, seul `ctx`
+// (passé une fois à `init`) l'a. Tâche 18 : ce n'est plus "lu une fois pour
+// toutes" comme documenté avant cette tâche — `setQuality` ci-dessous les
+// remet à jour en cours de session (changement de tier ⚙️/auto), et
+// `updateBoats`/`rescanAll` les relisent donc bien à chaque appel, pas
+// seulement à l'init.
 let qualityCrowds = 1;
+let qualityBoats = 1;
 
 function rescanAll(year) {
   applyCrowdYear(year, qualityCrowds);
@@ -1242,6 +1254,7 @@ function rescanAll(year) {
 export function init(ctx) {
   ensureRiverCurve();
   qualityCrowds = ctx.quality?.crowds ?? 1;
+  qualityBoats = ctx.quality?.boats ?? 1;
   buildBoats(ctx);
   buildCrowd(ctx);
   buildBirds(ctx);
@@ -1250,6 +1263,26 @@ export function init(ctx) {
   lastAppliedYear = null;
   rescanAll(2026);
   lastAppliedYear = 2026;
+}
+
+/**
+ * Tâche 18 — qualité graphique : rafraîchit `qualityCrowds`/`qualityBoats`
+ * depuis `ctx.quality` (déjà à jour — `quality.js` appelle `applyTier` avant
+ * celui-ci) puis reforce un rescan des foules pour l'année courante. Bon
+ * marché : la foule est un unique InstancedMesh de capacité fixe
+ * (`CROWD_MAX`, jamais reconstruit, voir `buildCrowd`) — changer sa densité
+ * ne fait que réécrire quel sous-ensemble des 3000 emplacements est actif,
+ * exactement ce que fait déjà `forceRescan` à chaque changement d'année.
+ * Les bateaux n'ont besoin d'aucun rebuild : `updateBoats` relit
+ * `qualityBoats` à chaque frame (voir `b.qualityRank >= qualityBoats`), donc
+ * la mise à jour de la variable suffit — elle sera visible à la frame
+ * suivante sans action supplémentaire ici.
+ * @param {object} ctx
+ */
+export function setQuality(ctx) {
+  qualityCrowds = ctx.quality?.crowds ?? 1;
+  qualityBoats = ctx.quality?.boats ?? 1;
+  if (lastAppliedYear !== null) rescanAll(lastAppliedYear);
 }
 
 export function update(dt, state) {
@@ -1273,10 +1306,15 @@ export function forceRescan(year) {
 export function debugCounts(year) {
   const fleets = fleetPresenceAt(year);
   const activeBoats = boats.instances.filter((b) => fleetPresence(year, b.fleet.from, b.fleet.to, b.fleet.fadeIn, b.fleet.fadeOut) > 0.5).length;
+  // Contrairement à `activeBoats` (présence de flotte seule), reflète aussi
+  // le tri par `qualityRank` — c'est le nombre qui bouge réellement quand on
+  // change de tier qualité (voir setQuality/updateBoats).
+  const visibleBoats = boats.instances.filter((b) => b.group.visible).length;
   const activeVignettes = VIGNETTES.filter((v) => vignetteActive(year, v.from, v.to)).map((v) => v.id);
   return {
     fleets,
     activeBoats,
+    visibleBoats,
     totalBoats: boats.instances.length,
     crowdActive: crowd.activeCount,
     crowdTarget: crowdCountForYear(year),

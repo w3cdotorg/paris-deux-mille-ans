@@ -27,6 +27,7 @@ import {
   update,
   forceRescan,
   forceWeather,
+  setQuality,
   debugState,
   stats,
 } from "../src/layers/weather.js";
@@ -658,6 +659,24 @@ test("update : la qualité réduite réduit vraiment la pluie et les fenêtres",
   const budget = stats();
   assert.equal(budget.rainStreaks, 2100);
   assert.ok(budget.windowCap < 600, `plafond = ${budget.windowCap}`);
+});
+
+test("setQuality (tâche 18) : réduit rain.count/drawRange en cours de session, sans réallocation de buffer", () => {
+  const ctx = fakeCtx();
+  ctx.quality = { rain: 1, windows: 1 };
+  terrain.init(ctx);
+  init(ctx);
+  const positionAttr = stats(); // juste pour vérifier que stats() fonctionne avant/après
+  assert.equal(positionAttr.rainStreaks, 6000);
+
+  ctx.quality.rain = 0.3; // valeur du tier "léger"
+  setQuality(ctx);
+  const after = stats();
+  assert.equal(after.rainStreaks, 1800);
+
+  ctx.quality.rain = 1;
+  setQuality(ctx);
+  assert.equal(stats().rainStreaks, 6000, "doit pouvoir remonter aussi, jamais au-delà du plafond alloué");
 });
 
 test("forceWeather : saute le fondu — le mode est effectif dès la frame suivante", () => {

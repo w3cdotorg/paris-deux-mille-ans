@@ -1719,6 +1719,31 @@ export function forceRescan(year) {
 }
 
 /**
+ * Tâche 18 — qualité graphique : `qualityRain` n'était échantillonné qu'à
+ * l'init (voir le commentaire de `init` ci-dessous) — ce point d'entrée le
+ * relit depuis `ctx.quality` (déjà à jour, `quality.js` appelle `applyTier`
+ * avant celui-ci) et réduit `rain.mesh`'s `drawRange` en conséquence. Bon
+ * marché : le buffer de pluie est TOUJOURS alloué à sa taille maximale
+ * (`RAIN_MAX_STREAKS`, voir `buildRain`) — seul le `drawRange` (combien de
+ * ces streaks sont effectivement dessinés) dépend de la qualité, donc changer
+ * de tier ne réalloue jamais rien, juste une borne.
+ *
+ * `ctx.quality.windows` est délibérément IGNORÉ ici : ce n'est pas l'un des
+ * cinq multiplicateurs de tier (`crowds`/`trees`/`rain`/`boats`/`shadows`,
+ * voir quality.js) — les fenêtres allumées restent au budget fixé à l'init,
+ * quel que soit le tier choisi.
+ * @param {object} ctx
+ */
+export function setQuality(ctx) {
+  const quality = ctx.quality || {};
+  qualityRain = quality.rain !== undefined ? quality.rain : 1;
+  if (rain.mesh) {
+    rain.count = rainStreakCount(qualityRain);
+    rain.mesh.geometry.setDrawRange(0, rain.count * 6);
+  }
+}
+
+/**
  * Saute la transition météo (1,5 s) et applique le mode immédiatement.
  * Utilisé par `window.__paris.setWeather` pour que les captures automatisées
  * n'attendent pas le fondu.

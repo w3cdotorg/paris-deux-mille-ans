@@ -592,6 +592,28 @@ function buildForestMeshes(ctx, candidates) {
   return { trunkMesh, crownMeshes };
 }
 
+/**
+ * Retire et libère le tronc + les 3 archétypes de couronne actuellement dans
+ * la scène — préalable indispensable à `setQuality` : changer la densité de
+ * la forêt change le nombre de candidats, donc la capacité des InstancedMesh
+ * (fixée à la construction, voir `buildForestMeshes`), donc il faut en
+ * reconstruire des neufs plutôt que de réécrire les anciens.
+ * @param {object} ctx
+ */
+function disposeForest(ctx) {
+  const { trunkMesh, crownMeshes } = forestState;
+  if (trunkMesh) {
+    ctx.scene.remove(trunkMesh);
+    trunkMesh.geometry.dispose();
+    trunkMesh.material.dispose();
+  }
+  for (const mesh of crownMeshes) {
+    ctx.scene.remove(mesh);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+  }
+}
+
 const _reuseMatrix = new THREE.Matrix4();
 const _reuseQuat = new THREE.Quaternion();
 const _reusePos = new THREE.Vector3();
@@ -707,6 +729,35 @@ export function forceRescan(year) {
   lastScanYear = rounded;
   lastScanTime = performance.now() / 1000;
   rescanAll(rounded);
+}
+
+/**
+ * Tâche 18 — qualité graphique : `ctx.quality.trees` n'est échantillonné
+ * qu'à l'init (`buildForestCandidates(ctx.quality)`, même convention que
+ * `life.js`), donc changer de tier en cours de session ne se voit pas sans
+ * cet appel explicite. Reconstruit entièrement les candidats + les
+ * InstancedMesh (la capacité de ces derniers dépend du nombre de candidats,
+ * donc pas de simple réécriture possible) puis rescanne l'année courante —
+ * coûteux (quelques ms), mais appelé seulement au changement de tier, jamais
+ * par frame. `ctx.quality` doit déjà porter la nouvelle valeur (voir
+ * `quality.js`'s `applyTier`, appelé avant celui-ci).
+ * @param {object} ctx
+ */
+export function setQuality(ctx) {
+  disposeForest(ctx);
+  forestState.candidates = buildForestCandidates(ctx.quality);
+  const built = buildForestMeshes(ctx, forestState.candidates);
+  forestState.trunkMesh = built.trunkMesh;
+  forestState.crownMeshes = built.crownMeshes;
+  rescanForest(lastScanYear ?? 2026);
+}
+
+/** Diagnostic — budget réellement construit, pour la vérification qualité (window.__paris). */
+export function stats() {
+  return {
+    forestCandidates: forestState.candidates.length,
+    treesActive: forestState.trunkMesh ? forestState.trunkMesh.count : 0,
+  };
 }
 
 // ============================================================================

@@ -418,6 +418,37 @@ test("rendu : les trains bougent avec le temps, et sont figés sous reducedMotio
   assert.equal(railDebugCounts(1900).trains.smoke, 0, "aucune fumée sous reducedMotion");
 });
 
+test("rendu (tâche 18, correctif deferred tâche 11) : sous reducedMotion, les trains ne sont réécrits qu'une fois par rescan", () => {
+  const scene = new THREE.Group();
+  initRails({ scene });
+  railsForceRescan(1900);
+
+  const bodies = scene.children.find((c) => c.name === "pc_train_bodies");
+  assert.ok(bodies, "les caisses de train doivent être dans la scène");
+  let calls = 0;
+  const original = bodies.setMatrixAt.bind(bodies);
+  bodies.setMatrixAt = (...args) => {
+    calls++;
+    return original(...args);
+  };
+
+  updateRails(0.016, fakeState(1900, { time: 0, reducedMotion: true }));
+  assert.ok(calls > 0, "la première frame gelée doit écrire les positions");
+  const callsAfterFirst = calls;
+
+  // Même année, toujours reducedMotion : plus aucune écriture nécessaire —
+  // le résultat serait identique (position figée), donc coûterait un
+  // recalcul + un re-upload GPU pour rien à chaque frame.
+  updateRails(0.016, fakeState(1900, { time: 5, reducedMotion: true }));
+  updateRails(0.016, fakeState(1900, { time: 9, reducedMotion: true }));
+  assert.equal(calls, callsAfterFirst, "aucune réécriture supplémentaire tant que reducedMotion reste actif");
+
+  // Un rescan (changement d'année) réarme l'écriture — nouvelle position à poser.
+  railsForceRescan(1910);
+  updateRails(0.016, fakeState(1910, { time: 9, reducedMotion: true }));
+  assert.ok(calls > callsAfterFirst, "un rescan doit réarmer l'écriture");
+});
+
 test("rendu : les voitures roulent dans les deux sens, de part et d'autre du terre-plein", () => {
   const scene = new THREE.Group();
   initRails({ scene });

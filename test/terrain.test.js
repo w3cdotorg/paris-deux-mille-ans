@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { groundUrbanBlend, isForestCandidate } from "../src/layers/terrain.js";
+import * as THREE from "three";
+import { groundUrbanBlend, isForestCandidate, init, setQuality, stats, forceRescan } from "../src/layers/terrain.js";
 import { urbanYear } from "../src/geography.js";
+
+function fakeCtx(quality) {
+  return { scene: new THREE.Scene(), quality };
+}
 
 // ============================================================================
 // groundUrbanBlend — pure forest<->urban colour decision, no THREE/WebGL
@@ -75,4 +80,40 @@ test("isForestCandidate: the Seine margin boundary is land-inclusive, water just
 
 test("isForestCandidate: a cell that just urbanized (uYear === year) is excluded", () => {
   assert.equal(isForestCandidate(20, 2026, 2026, 9), false);
+});
+
+// ============================================================================
+// setQuality (tâche 18) — la forêt reconstruit sa densité en cours de session
+// ============================================================================
+
+test("setQuality: baisser ctx.quality.trees réduit vraiment le nombre d'arbres construits", () => {
+  const ctx = fakeCtx({ trees: 1 });
+  init(ctx);
+  forceRescan(2026);
+  const before = stats();
+  assert.ok(before.forestCandidates > 0, "aucun candidat construit à trees:1");
+
+  ctx.quality.trees = 0.4; // valeur du tier "léger"
+  setQuality(ctx);
+  const after = stats();
+
+  assert.ok(
+    after.forestCandidates < before.forestCandidates,
+    `candidats: avant=${before.forestCandidates} après=${after.forestCandidates}`
+  );
+  assert.ok(after.treesActive < before.treesActive, `actifs: avant=${before.treesActive} après=${after.treesActive}`);
+});
+
+test("setQuality: remonter la qualité reconstruit une forêt plus dense, sans exception", () => {
+  const ctx = fakeCtx({ trees: 0.4 });
+  init(ctx);
+  forceRescan(2026);
+  const low = stats();
+
+  ctx.quality.trees = 1;
+  setQuality(ctx);
+  const high = stats();
+
+  assert.ok(high.forestCandidates > low.forestCandidates);
+  assert.ok(high.treesActive > low.treesActive);
 });
