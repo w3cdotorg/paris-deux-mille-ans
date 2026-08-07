@@ -4,9 +4,9 @@
 
 **Goal:** Une expérience Three.js hors ligne où l'on survole un Paris 3D dense et vivant, et où un grand slider temporel fait couler 2 300 ans d'histoire (14 moments, de Lutèce à 2026) sur une géographie constante — avec Tour Eiffel fantôme, balise « chez nous » (Leibniz × Jean Dollfus), météo, bouton Lecture, narration française à voix haute et sons d'ambiance procéduraux.
 
-**Architecture:** Sources modulaires dans `src/` (un module par couche : terrain, bâtiments, murailles, monuments, rails, vie, fantômes, météo, audio, UI), bundlées par esbuild en **un seul `index.html` autonome** (three.js inliné) — car les modules ES ne se chargent pas en `file://` ; le fichier final s'ouvre d'un double-clic, hors ligne, pour toujours. Un moteur temporel pur (`timeEngine.js`) pilote tout depuis une seule valeur `year` : chaque objet a un calque temporel (naissance, construction, mort, démolition) et chaque moment une signature d'ambiance interpolée.
+**Architecture:** Sources modulaires dans `src/` (un module par couche : terrain, bâtiments, murailles, monuments, rails, vie, fantômes, météo, audio, UI), chargées **en modules ES natifs** par `index.html` via un import map pointant sur `vendor/three.module.js` (épinglé, vendorisé). **Pas de bundling** (décision utilisateur) : le JS reste séparé et lisible ; l'app est servie par `./serve.sh` en local ou par GitHub Pages. Un moteur temporel pur (`timeEngine.js`) pilote tout depuis une seule valeur `year` : chaque objet a un calque temporel (naissance, construction, mort, démolition) et chaque moment une signature d'ambiance interpolée.
 
-**Tech Stack:** Three.js `0.180.0` (épinglé, bundlé), esbuild (build), `node --test` (logique pure), Playwright MCP (vérifs visuelles), Web Audio API (sons procéduraux), `speechSynthesis` (voix FR).
+**Tech Stack:** Three.js `0.180.0` (épinglé, vendorisé dans `vendor/`), `node --test` (logique pure), Playwright MCP (vérifs visuelles), Web Audio API (sons procéduraux), `speechSynthesis` (voix FR).
 
 ## Global Constraints
 
@@ -47,15 +47,15 @@
 
 ---
 
-### Task 1: Scaffolding, build esbuild → index.html autonome, cube fumant
+### Task 1: Scaffolding — modules ES + Three.js vendorisé, cube qui tourne
 
 **Files:**
-- Create: `package.json`, `.gitignore`, `build.mjs`, `serve.sh`, `src/index.template.html`, `src/main.js`
+- Create: `package.json`, `.gitignore`, `serve.sh`, `index.html`, `src/main.js`, `vendor/three.module.js` (copié)
 
 **Interfaces:**
-- Produces: `npm run build` → `index.html` autonome (JS inliné à la place du marqueur `<!--BUNDLE-->`) ; `npm test` → node --test sur `test/` ; `./serve.sh` → serveur dev port 8123 ; `src/main.js` avec boucle `requestAnimationFrame`, resize, `dpr ≤ 2`.
+- Produces: `index.html` à la racine chargeant `src/main.js` en `<script type="module">` avec import map `{"three": "./vendor/three.module.js"}` ; `npm test` → node --test sur `test/` ; `./serve.sh` → serveur dev port 8123 ; `src/main.js` avec boucle `requestAnimationFrame`, resize, `dpr ≤ 2`. **Aucun build : les fichiers servis sont les sources.**
 
-- [ ] **Step 1 : `package.json` + install**
+- [ ] **Step 1 : `package.json` + vendoring**
 
 ```json
 {
@@ -63,37 +63,29 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node build.mjs",
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "vendor": "cp node_modules/three/build/three.module.js vendor/"
   },
-  "dependencies": { "three": "0.180.0" },
-  "devDependencies": { "esbuild": "0.25.0" }
+  "dependencies": { "three": "0.180.0" }
 }
 ```
 
-`.gitignore` : `node_modules/`, `build/`, `.DS_Store`. Puis `source ~/.zshrc && npm install`.
+`.gitignore` : `node_modules/`, `.DS_Store`. Puis `source ~/.zshrc && npm install && mkdir -p vendor && npm run vendor`. **`vendor/three.module.js` est committé** (c'est le point : l'app tourne sans npm, sur GitHub Pages ou n'importe quel serveur statique).
 
-- [ ] **Step 2 : `build.mjs`** — bundle `src/main.js` (format iife, minify, target es2020) via l'API esbuild, lit `src/index.template.html`, remplace `<!--BUNDLE-->` par `<script>…bundle…</script>`, écrit `index.html` à la racine. Échoue bruyamment si le marqueur est absent.
+- [ ] **Step 2 : `serve.sh`** — `#!/bin/sh\ncd "$(dirname "$0")" && python3 -m http.server 8123` (chmod +x). Ouvrir `http://localhost:8123/`.
 
-```js
-import { build } from 'esbuild';
-import { readFileSync, writeFileSync } from 'node:fs';
-const r = await build({ entryPoints: ['src/main.js'], bundle: true, minify: true,
-  format: 'iife', target: 'es2020', write: false, logLevel: 'error' });
-const js = r.outputFiles[0].text;
-const tpl = readFileSync('src/index.template.html', 'utf8');
-if (!tpl.includes('<!--BUNDLE-->')) throw new Error('marqueur <!--BUNDLE--> absent');
-writeFileSync('index.html', tpl.replace('<!--BUNDLE-->', () => `<script>${js}</script>`));
-console.log('index.html écrit,', (js.length / 1e6).toFixed(2), 'MB de JS');
+- [ ] **Step 3 : `index.html` + main.js « cube fumant »** — `index.html` : `<!doctype html>`, `lang="fr"`, viewport, fonts Fredoka/Baloo 2 avec repli système, `<canvas id="scene">`, CSS minimal (fond `#0d1020`, canvas plein écran), puis :
+
+```html
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+<script type="module" src="./src/main.js"></script>
 ```
 
-`serve.sh` : `#!/bin/sh\ncd "$(dirname "$0")" && python3 -m http.server 8123` (chmod +x). En dev on sert la racine et on ouvre `http://localhost:8123/index.html` (rebuild à chaque itération : `npm run build` est < 1 s).
+`src/main.js` : renderer WebGL sur `#scene`, `setPixelRatio(Math.min(devicePixelRatio, 2))`, caméra perspective, un cube vert en rotation, lumière directionnelle, resize handler, boucle rAF.
 
-- [ ] **Step 3 : template + main.js « cube fumant »** — `src/index.template.html` : `<!doctype html>`, `lang="fr"`, viewport, fonts Fredoka/Baloo 2 avec repli, `<canvas id="scene">`, CSS minimal (fond `#0d1020`, canvas plein écran), `<!--BUNDLE-->` avant `</body>`. `src/main.js` : renderer WebGL sur `#scene`, `setPixelRatio(Math.min(devicePixelRatio, 2))`, caméra perspective, un cube vert en rotation, lumière directionnelle, resize handler, boucle rAF.
+- [ ] **Step 4 : vérifier** — `./serve.sh &` ; Playwright MCP : `browser_navigate` → `http://localhost:8123/`, `browser_console_messages` (aucune erreur), `browser_take_screenshot` (cube visible).
 
-- [ ] **Step 4 : vérifier** — `npm run build && ./serve.sh &` ; Playwright MCP : `browser_navigate` → `http://localhost:8123/index.html`, `browser_console_messages` (aucune erreur), `browser_take_screenshot` (cube visible). Vérifier aussi que `open index.html` (file://) fonctionne : re-screenshot via `browser_navigate` sur l'URL `file:///Users/willow/Sites/_Claude_output/raphael_paris/index.html`.
-
-- [ ] **Step 5 : commit** — `git add -A && git commit -m "Scaffolding : build esbuild vers index.html autonome, scène Three.js de base"`
+- [ ] **Step 5 : commit** — `git add -A && git commit -m "Scaffolding : modules ES, Three.js vendorisé, scène de base"` (vérifier que `vendor/three.module.js` est bien dans le commit).
 
 ---
 
@@ -396,15 +388,15 @@ Récits (verbatim) :
 - Create: `README.md`
 - Modify: au fil des corrections
 
-- [ ] **Step 1 : la grande traversée** — build final ; Playwright sur `file://` ET `http://` : screenshot de **chacun des 14 moments** (vue ensemble) + 4 presets + 4 météos + une lecture ▶️ complète en ×2 ; console **zéro erreur** sur tout le parcours ; scrub violent aller-retour ×5 : aucun objet orphelin, aucune fuite (heap stable via `browser_run_code_unsafe` → `performance.memory` avant/après).
+- [ ] **Step 1 : la grande traversée** — Playwright sur `http://localhost:8123/` : screenshot de **chacun des 14 moments** (vue ensemble) + 4 presets + 4 météos + une lecture ▶️ complète en ×2 ; console **zéro erreur** sur tout le parcours ; scrub violent aller-retour ×5 : aucun objet orphelin, aucune fuite (heap stable via `browser_run_code_unsafe` → `performance.memory` avant/après).
 - [ ] **Step 2 : revue fraîcheur spec** — relire la spec section par section et cocher chaque exigence contre l'implémentation (les 14 moments distincts, repères, météo×époque, lecture, sons, narration, compteur, YAGNI respecté). Corriger ce qui manque.
-- [ ] **Step 3 : README.md** — en français, pour la famille : double-cliquer `index.html`, les contrôles (doigts/souris), les boutons, « pour reconstruire : npm install && npm run build ». Une ligne d'avertissement charmante : « La géographie est fidèle, les dates sont vraies, les maisons sont inventées. »
+- [ ] **Step 3 : README.md** — en français, pour la famille : lancer `./serve.sh` puis ouvrir `http://localhost:8123/` (ou visiter la page GitHub Pages), les contrôles (doigts/souris), les boutons, « aucune installation nécessaire, npm seulement pour les tests ». Une ligne d'avertissement charmante : « La géographie est fidèle, les dates sont vraies, les maisons sont inventées. »
 - [ ] **Step 4 : commit final** — `"Paris, deux mille ans — v1 pour Raphaël 🗼"` — et message à l'utilisateur : rappeler le garde-fou (« dis-moi si c'est trop fouillé, on élague »), demander le test iPad M1 réel et l'écoute des sons/voix.
 
 ---
 
 ## Self-review du plan (fait à l'écriture)
 
-- **Couverture spec :** 14 moments ✓ (T2) ; scène/géographie/relief/îles dont Louviers ✓ (T4-T5) ; caméra+presets+tactile ✓ (T6) ; densité bâtie + re-clad ✓ (T7-T8) ; enceintes+Bastille+boulevards ✓ (T9) ; ancres Notre-Dame/Louvre + monuments ✓ (T10-T11) ; PC/métro/périph ✓ (T11) ; repères fantômes + célébrations 1860/1889 + toggle ✓ (T12) ; flottes/foules/oiseaux/vignettes ✓ (T13) ; signatures lumière + météo 4 modes nuit lisible ✓ (T14) ; cartes/TTS off par défaut/clic monuments/« montrer les zones »/compteur ✓ (T15) ; Lecture + vitesses ✓ (T16) ; sons procéduraux off par défaut ✓ (T17) ; instancing/LOD/streaming/dpr/qualité/reduced-motion/60fps ✓ (T7, T18) ; hors-ligne « open index.html » ✓ (T1, résout l'impasse file://+modules par bundling — déviation assumée de la spec « vendor/ » au profit du même objectif) ; YAGNI ✓.
+- **Couverture spec :** 14 moments ✓ (T2) ; scène/géographie/relief/îles dont Louviers ✓ (T4-T5) ; caméra+presets+tactile ✓ (T6) ; densité bâtie + re-clad ✓ (T7-T8) ; enceintes+Bastille+boulevards ✓ (T9) ; ancres Notre-Dame/Louvre + monuments ✓ (T10-T11) ; PC/métro/périph ✓ (T11) ; repères fantômes + célébrations 1860/1889 + toggle ✓ (T12) ; flottes/foules/oiseaux/vignettes ✓ (T13) ; signatures lumière + météo 4 modes nuit lisible ✓ (T14) ; cartes/TTS off par défaut/clic monuments/« montrer les zones »/compteur ✓ (T15) ; Lecture + vitesses ✓ (T16) ; sons procéduraux off par défaut ✓ (T17) ; instancing/LOD/streaming/dpr/qualité/reduced-motion/60fps ✓ (T7, T18) ; servi via serveur local/GitHub Pages, modules séparés sans bundling, three vendorisé ✓ (T1, amendement utilisateur du 2026-08-04) ; YAGNI ✓.
 - **Placeholders :** aucun TBD ; les contenus (textes, coordonnées, années, recettes audio, vignettes) sont dans le plan.
 - **Cohérence des noms :** `init(ctx)/update(dt,state)`, `state{year,weather,showLandmarks,reducedMotion,time}`, `bus`, `lifecycle/momentBlend/sliderToYear/yearToSlider`, `heightAt/urbanYear/SEINE_POINTS/LANDMARKS/ISLANDS`, `MOMENTS` — utilisés uniformément dans toutes les tâches.

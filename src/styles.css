@@ -1,0 +1,740 @@
+/*
+ * Paris, deux mille ans — UI shell (frise, boutons ronds, popovers).
+ * Same family as "Dans mon volcan": verre dépoli, gros touch targets,
+ * palette chaude sur fond nuit, Fredoka pour l'affiche / Baloo 2 pour l'UI.
+ */
+
+:root {
+  --pdma-glass-bg: rgba(20, 20, 38, 0.55);
+  --pdma-glass-border: rgba(255, 255, 255, 0.14);
+  --pdma-glass-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --pdma-warm-1: #ffb454;
+  --pdma-warm-3: #ffe0b0;
+  --pdma-cream: #fdf3e4;
+  --pdma-ink: #2a1d12;
+}
+
+.pdma-icon-btn,
+.pdma-moment-btn,
+.pdma-popover-btn,
+.pdma-year-display,
+.pdma-story-card {
+  font-family: "Baloo 2", "Fredoka", system-ui, sans-serif;
+}
+
+/* ============================== Story card slot (Task 15) ============== */
+
+.pdma-story-card {
+  position: fixed;
+  left: 20px;
+  bottom: 132px; /* clears the bottom frise */
+  max-width: 360px;
+  z-index: 20;
+  background: var(--pdma-glass-bg);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid var(--pdma-glass-border);
+  border-radius: 24px;
+  box-shadow: var(--pdma-glass-shadow);
+  color: var(--pdma-cream);
+  padding: 18px 20px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-36px) scale(0.96);
+  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.3s ease, padding 0.3s ease,
+    max-width 0.3s ease;
+}
+
+.pdma-story-card.pdma-shown {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+  pointer-events: auto;
+}
+
+/* Replié : ne montre plus que l'icône + l'année, en pastille cliquable. */
+.pdma-story-card.pdma-collapsed {
+  max-width: 150px;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+
+.pdma-story-card.pdma-collapsed .pdma-card-body {
+  display: none;
+}
+
+.pdma-card-top {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.pdma-card-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.pdma-card-year {
+  font-family: "Fredoka", sans-serif;
+  font-weight: 600;
+  font-size: clamp(30px, 6vw, 48px);
+  color: var(--pdma-warm-3);
+  line-height: 1;
+}
+
+.pdma-card-body {
+  margin-top: 10px;
+}
+
+.pdma-card-titre {
+  margin: 0 0 6px;
+  font-family: "Fredoka", sans-serif;
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--pdma-warm-3);
+}
+
+.pdma-card-recit {
+  margin: 0 0 10px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.pdma-card-cheznous {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pdma-warm-1);
+}
+
+.pdma-card-voice {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 20px;
+}
+
+.pdma-card-voice.pdma-voice-unavailable {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ============================== Compteur d'habitants (Task 15) ========== */
+
+.pdma-pop-counter {
+  position: fixed;
+  top: 132px;
+  right: 18px;
+  z-index: 29;
+  font-family: "Baloo 2", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pdma-warm-3);
+  background: var(--pdma-glass-bg);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  border: 1px solid var(--pdma-glass-border);
+  border-radius: 999px;
+  padding: 6px 14px;
+  box-shadow: var(--pdma-glass-shadow);
+  pointer-events: none;
+}
+
+.pdma-pop-counter.pdma-pop-tick {
+  animation: pdma-pop-tick-anim 0.5s ease;
+}
+
+@keyframes pdma-pop-tick-anim {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.14);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ============================== Étiquette de monument (Task 15) ========= */
+
+.pdma-monument-label {
+  display: none;
+  position: fixed;
+  z-index: 32;
+  max-width: 300px;
+  background: var(--pdma-glass-bg);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid var(--pdma-glass-border);
+  border-radius: 20px;
+  box-shadow: var(--pdma-glass-shadow);
+  color: var(--pdma-cream);
+  padding: 14px 44px 14px 16px;
+  pointer-events: auto;
+}
+
+.pdma-monument-label.pdma-open {
+  display: block;
+}
+
+.pdma-monument-label-title {
+  font-family: "Fredoka", sans-serif;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--pdma-warm-3);
+  margin-bottom: 6px;
+}
+
+.pdma-monument-label-phrase {
+  font-size: 14px;
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+/* Bouton de fermeture : zone cliquable garantie >=48px, indépendante de la
+   taille visuelle du "✕" (même technique que .pdma-moment-btn::before). */
+.pdma-monument-label-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  border: none;
+  background: transparent;
+  color: var(--pdma-cream);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pdma-monument-label-voice {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  font-size: 18px;
+}
+
+.pdma-monument-label-voice.pdma-voice-unavailable {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdma-story-card {
+    transition: none;
+  }
+  .pdma-pop-counter.pdma-pop-tick {
+    animation: none;
+  }
+}
+
+/* Pendant partenaire JS du media query ci-dessus : `state.reducedMotion` peut
+   être activé depuis l'appli elle-même (pas seulement le réglage système), et
+   narration.js pose cette classe en conséquence (voir syncCardMotionClass). */
+.pdma-story-card.pdma-instant {
+  transition: none;
+}
+
+@media (max-width: 520px) {
+  .pdma-story-card {
+    bottom: 128px;
+    left: 12px;
+    max-width: calc(100vw - 24px);
+  }
+  .pdma-pop-counter {
+    top: 118px;
+    right: 12px;
+  }
+}
+
+/* ============================== Round action buttons =================== */
+
+.pdma-buttons-row {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 30;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  max-width: min(340px, calc(100vw - 36px));
+  pointer-events: auto;
+}
+
+.pdma-btn-wrap {
+  position: relative;
+}
+
+.pdma-icon-btn {
+  width: 52px;
+  height: 52px;
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 50%;
+  border: 1px solid var(--pdma-glass-border);
+  background: var(--pdma-glass-bg);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  box-shadow: var(--pdma-glass-shadow);
+  font-size: 24px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--pdma-cream);
+  transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+.pdma-icon-btn:hover {
+  transform: translateY(-2px) scale(1.05);
+}
+
+.pdma-icon-btn:active {
+  transform: scale(0.94);
+}
+
+.pdma-icon-btn.pdma-pressed {
+  background: linear-gradient(160deg, rgba(255, 180, 84, 0.4), rgba(255, 123, 84, 0.28));
+  border-color: rgba(255, 200, 130, 0.85);
+  box-shadow: 0 0 0 3px rgba(255, 180, 84, 0.25), var(--pdma-glass-shadow);
+}
+
+/* Popovers (views menu, quality menu) */
+
+.pdma-popover {
+  display: none;
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 200px;
+  padding: 10px;
+  border-radius: 20px;
+  background: var(--pdma-glass-bg);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid var(--pdma-glass-border);
+  box-shadow: var(--pdma-glass-shadow);
+  z-index: 31;
+}
+
+.pdma-popover.pdma-open {
+  display: flex;
+}
+
+.pdma-popover-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--pdma-cream);
+  font-size: 16px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.pdma-popover-btn:hover {
+  background: rgba(255, 180, 84, 0.22);
+}
+
+.pdma-popover-btn:active {
+  transform: scale(0.97);
+}
+
+.pdma-popover-btn.pdma-pressed {
+  background: linear-gradient(160deg, rgba(255, 180, 84, 0.4), rgba(255, 123, 84, 0.28));
+}
+
+.pdma-popover-emoji {
+  font-size: 20px;
+}
+
+/* Post-v1 — curseurs de volume (popovers 🔈 sons, 🔊 voix). */
+
+.pdma-volume-popover {
+  min-width: 220px;
+}
+
+.pdma-volume-toggle {
+  width: 100%;
+}
+
+.pdma-slider-row {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 2px 14px 6px;
+}
+
+.pdma-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 44px;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.pdma-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.pdma-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.pdma-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(160deg, rgba(255, 200, 130, 0.95), rgba(255, 123, 84, 0.9));
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.pdma-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(160deg, rgba(255, 200, 130, 0.95), rgba(255, 123, 84, 0.9));
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.pdma-slider:focus-visible {
+  outline: 2px solid rgba(255, 200, 130, 0.9);
+  outline-offset: 4px;
+  border-radius: 3px;
+}
+
+/* ============================== Bottom timeline (frise) ================= */
+
+.pdma-timeline {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  padding: 10px 20px calc(16px + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(
+    to top,
+    rgba(10, 12, 24, 0.72) 0%,
+    rgba(10, 12, 24, 0.55) 60%,
+    rgba(10, 12, 24, 0) 100%
+  );
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  pointer-events: auto;
+}
+
+/* Tâche 16 : bouton ▶️ Lecture + molettes de vitesse, à gauche de la frise. */
+
+.pdma-timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.pdma-timeline-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pdma-play-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.pdma-play-btn {
+  width: 68px;
+  height: 68px;
+  min-width: 60px;
+  min-height: 60px;
+  font-size: 30px;
+  box-shadow: var(--pdma-glass-shadow), 0 0 0 3px rgba(255, 180, 84, 0.18);
+}
+
+.pdma-play-btn.pdma-pressed {
+  background: linear-gradient(160deg, rgba(255, 180, 84, 0.45), rgba(255, 123, 84, 0.32));
+  border-color: rgba(255, 210, 140, 0.95);
+  box-shadow: 0 0 0 3px rgba(255, 180, 84, 0.28), var(--pdma-glass-shadow);
+}
+
+.pdma-speed-chips {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 10px);
+  /* Ancré au bord gauche du bouton (pas centré) : le bouton ▶️ est tout
+     contre le bord gauche de l'écran (proéminent "à gauche de la frise"), et
+     un popover centré sur lui déborderait hors du viewport côté gauche. */
+  left: 0;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 999px;
+  background: var(--pdma-glass-bg);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  border: 1px solid var(--pdma-glass-border);
+  box-shadow: var(--pdma-glass-shadow);
+  white-space: nowrap;
+}
+
+.pdma-speed-chips.pdma-open {
+  display: flex;
+}
+
+.pdma-chip {
+  min-width: 44px;
+  min-height: 36px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--pdma-cream);
+  font-family: "Baloo 2", sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.pdma-chip:hover {
+  background: rgba(255, 180, 84, 0.22);
+}
+
+.pdma-chip:active {
+  transform: scale(0.94);
+}
+
+.pdma-chip.pdma-pressed {
+  background: linear-gradient(160deg, rgba(255, 180, 84, 0.5), rgba(255, 123, 84, 0.35));
+}
+
+.pdma-year-display {
+  text-align: center;
+  font-family: "Fredoka", sans-serif;
+  font-weight: 600;
+  font-size: clamp(28px, 6vw, 44px);
+  color: var(--pdma-warm-3);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+
+.pdma-track {
+  position: relative;
+  height: 64px;
+  margin: 4px 6px 0;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.pdma-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 10px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    #2f3b57 0%,
+    #4a4f6b 20%,
+    #7a5a63 45%,
+    #c98a54 65%,
+    #ffb454 85%,
+    #ffe0b0 100%
+  );
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.pdma-track-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 10px;
+  width: 0%;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 180, 84, 0.15), rgba(255, 224, 176, 0.9));
+  box-shadow: 0 0 12px rgba(255, 180, 84, 0.55);
+  pointer-events: none;
+}
+
+.pdma-moment-btn {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 50%;
+  border: 1px solid var(--pdma-glass-border);
+  background: rgba(20, 20, 38, 0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease;
+  z-index: 2;
+}
+
+.pdma-moment-btn:hover {
+  transform: translate(-50%, -50%) scale(1.12);
+}
+
+/*
+ * Guaranteed ≥48px hit area, independent of the button's visual size.
+ * The visual disc may shrink on narrow phones (see the max-width:520px
+ * query below) so 14 of them can fit without excessive overlap, but the
+ * tappable zone must never shrink with it — these are the primary
+ * affordance for a small child. ::before is generated content painted
+ * inside the button's own box (absolutely positioned, so it escapes the
+ * button's *visual* bounds without affecting layout); a pointer landing
+ * on it still resolves its `target` to the host <button>, so this is a
+ * real hit-area extension, not just a cosmetic square.
+ */
+.pdma-moment-btn::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  transform: translate(-50%, -50%);
+}
+
+.pdma-moment-btn.pdma-active {
+  background: linear-gradient(160deg, rgba(255, 180, 84, 0.45), rgba(255, 123, 84, 0.3));
+  border-color: rgba(255, 210, 140, 0.95);
+  animation: pdma-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes pdma-pulse {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 180, 84, 0.55);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.16);
+    box-shadow: 0 0 0 10px rgba(255, 180, 84, 0);
+  }
+}
+
+.pdma-handle {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 54px;
+  height: 54px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: transparent;
+  border: 3px solid var(--pdma-cream);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35), 0 0 16px rgba(255, 180, 84, 0.75);
+  pointer-events: none;
+  z-index: 1; /* sits behind the moment icons so it rings, not hides, one */
+}
+
+/* Tâche 16 : petit bouquet de fin sur l'icône 2026, une fois le voyage
+   automatique arrivé au bout (voir ui.js, écouteur "playfinished"). */
+.pdma-moment-btn.pdma-finish-pulse {
+  animation: pdma-finish-pulse-anim 0.7s ease;
+}
+
+@keyframes pdma-finish-pulse-anim {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 180, 84, 0.65);
+  }
+  40% {
+    transform: translate(-50%, -50%) scale(1.4);
+    box-shadow: 0 0 0 16px rgba(255, 180, 84, 0);
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 180, 84, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdma-moment-btn.pdma-active {
+    animation: none;
+  }
+  .pdma-moment-btn.pdma-finish-pulse {
+    animation: none;
+  }
+  .pdma-icon-btn,
+  .pdma-moment-btn,
+  .pdma-popover-btn,
+  .pdma-chip {
+    transition: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .pdma-icon-btn {
+    width: 48px;
+    height: 48px;
+    font-size: 21px;
+  }
+  .pdma-play-btn {
+    width: 56px;
+    height: 56px;
+    min-width: 52px;
+    min-height: 52px;
+    font-size: 24px;
+  }
+  .pdma-timeline-row {
+    gap: 8px;
+  }
+  .pdma-buttons-row {
+    top: 12px;
+    right: 12px;
+    gap: 8px;
+  }
+  .pdma-moment-btn {
+    /* Deliberately NOT shrinking width/height here (an earlier draft did,
+       but min-width/min-height:48px on the base rule already clamps the
+       box to 48px regardless — a smaller `width` here would be silently
+       overridden and misleading to read). 14 48px discs *do* overlap on a
+       narrow phone (~33px apart at 480px wide), which is the reviewed,
+       accepted trade-off: circular glass buttons tolerate overlap
+       gracefully, each keeps its own centered ::before hit area, and the
+       track itself remains grab-anywhere. Only the glyph shrinks a touch
+       for breathing room inside the (still 48px) circle. */
+    font-size: 18px;
+  }
+}
