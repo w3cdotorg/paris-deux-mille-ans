@@ -336,6 +336,20 @@ const HILLS = [
   { x: -300, z: -90, height: 6, sigma: 55 }, // Chaillot
 ];
 
+// Post-v1 enhancement: at true scale the hills (13u peak over a sigma-60
+// gaussian) were nearly invisible from the aerial ensemble view — "on ne voit
+// pas le relief, notamment près de la basilique du Sacré-Cœur". The three
+// exaggeration factors below are the *only* place relief gets scaled up;
+// heightAt stays the single source of truth, so every consumer that samples
+// it (directly or via terrain.js's groundHeightAt) inherits the change for
+// free. Hills get the full ×2.6 (Montmartre's 13u peak -> ~34u, a real
+// butte); the plain noise gets a mild ×1.5 lift so the base terrain doesn't
+// look flat by comparison; the Seine valley is deliberately capped at ×1.3
+// so the river banks rise slightly but the river never reads as a canyon.
+const RELIEF_EXAGGERATION = 2.6;
+const PLAIN_NOISE_EXAGGERATION = 1.5;
+const SEINE_RELIEF_EXAGGERATION = 1.3;
+
 const SEINE_TROUGH_DEPTH = 1.5;
 const SEINE_TROUGH_SIGMA = 12.5; // ~half of the ~25-unit river width
 const SEINE_BANK_HEIGHT = 0.25;
@@ -432,11 +446,11 @@ export function distanceToSeineFull(x, z) {
  * @returns {number}
  */
 export function heightAt(x, z) {
-  let h = seededNoise(x, z, 0, 0.4); // base plain, ±0.4
+  let h = seededNoise(x, z, 0, 0.4) * PLAIN_NOISE_EXAGGERATION; // base plain, ±0.6
   for (const hill of HILLS) {
-    h += gaussianHill(x, z, hill);
+    h += gaussianHill(x, z, hill) * RELIEF_EXAGGERATION;
   }
-  h += seineRelief(x, z);
+  h += seineRelief(x, z) * SEINE_RELIEF_EXAGGERATION;
   return h;
 }
 

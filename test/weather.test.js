@@ -575,7 +575,12 @@ test("update : à 885, les feux du siège brûlent et scintillent", () => {
   assert.equal(lights.length, 6, "6 brasiers attendus sur les berges");
   for (const l of lights) {
     assert.ok(l.intensity > 0, "brasier éteint");
-    assert.ok(Math.abs(l.position.y) < 6, "brasier hors sol");
+    // Bound loosened 6 -> 10 for the post-v1 relief exaggeration (RELIEF_EXAGGERATION
+    // in geography.js): one bank fire (seg 3, rive gauche vers Sainte-Geneviève)
+    // now sits on legitimately higher ground (~7.4u) than before. Still a tight
+    // sanity bound — a real "floating in the sky" bug would blow well past it,
+    // and it stays far under Montmartre's own ~34u exaggerated peak.
+    assert.ok(Math.abs(l.position.y) < 10, "brasier hors sol");
   }
   const before = lights.map((l) => l.intensity);
   state.time += 0.3;
