@@ -79,6 +79,73 @@ test("cardTrigger : choisit l'ancre la plus proche quand deux zones se chevauche
 });
 
 // ============================================================================
+// cardTrigger.dismiss() — fermeture manuelle (✕, post-v2 "navigation
+// difficile") : ne redéclenche pas tant qu'on reste autour du même moment,
+// réarme en changeant de moment (brief : scrub ±5 autour de 1860 après ✕ ->
+// pas de retour ; scrub jusqu'à 1889 -> nouvelle carte).
+// ============================================================================
+
+test("cardTrigger.dismiss() : le moment fermé ne se redéclenche plus tant qu'on reste dans sa zone (scrub ±5 autour de l'ancre)", () => {
+  const trigger = createCardTrigger();
+  const idx1860 = MOMENTS.findIndex((m) => m.year === 1860);
+  assert.equal(trigger.evaluate(1860), idx1860); // entrée normale
+  trigger.dismiss(); // ✕ cliqué
+  // Scrub autour de 1860 (brief : "±5 ans") en restant plus proche de 1860 que
+  // de 1865 (le milieu des deux ancres est à 1862,5) : jamais de nouvelle
+  // entrée. Voir le test "changer de moment réarme" plus bas pour 1865/1889.
+  for (const y of [1858, 1861, 1862, 1860, 1855, 1860]) {
+    assert.equal(trigger.evaluate(y), null, `pas de redéclenchement attendu à ${y}`);
+  }
+});
+
+test("cardTrigger.dismiss() : changer de moment réarme le moment fermé (brief : scrub jusqu'à 1889 -> nouvelle carte)", () => {
+  const trigger = createCardTrigger();
+  const idx1860 = MOMENTS.findIndex((m) => m.year === 1860);
+  const idx1889 = MOMENTS.findIndex((m) => m.year === 1889);
+  assert.equal(trigger.evaluate(1860), idx1860);
+  trigger.dismiss();
+  assert.equal(trigger.evaluate(1862), null, "toujours fermé tant qu'on reste sur 1860");
+  assert.equal(trigger.evaluate(1889), idx1889, "un autre moment (1889) se déclenche normalement, fermeture ou pas");
+});
+
+test("cardTrigger.dismiss() : sortir entièrement de la zone puis y revenir réarme aussi (on n'est plus « autour de cette année »)", () => {
+  const trigger = createCardTrigger();
+  const idx1860 = MOMENTS.findIndex((m) => m.year === 1860);
+  assert.equal(trigger.evaluate(1860), idx1860);
+  trigger.dismiss();
+  assert.equal(trigger.evaluate(1840), null); // sort de toute zone (activeIndex -> -1)
+  assert.equal(trigger.evaluate(1860), idx1860, "ré-entrée depuis hors-zone : réarmée");
+});
+
+test("cardTrigger.dismiss() : revenir sur le moment fermé après en avoir visité un autre le réarme (pas de fermeture qui « colle » à un moment différent)", () => {
+  const trigger = createCardTrigger();
+  const idx1860 = MOMENTS.findIndex((m) => m.year === 1860);
+  const idx1865 = MOMENTS.findIndex((m) => m.year === 1865);
+  assert.equal(trigger.evaluate(1860), idx1860);
+  trigger.dismiss();
+  assert.equal(trigger.evaluate(1868), idx1865, "1868 est plus proche de 1865 (3) que de 1860 (8) : nouveau moment, se déclenche");
+  assert.equal(trigger.evaluate(1862), idx1860, "retour sur 1860 après avoir quitté pour 1865 : réarmé, se redéclenche");
+});
+
+test("cardTrigger.dismiss() : sans effet si aucun moment n'est actif (activeIndex === -1)", () => {
+  const trigger = createCardTrigger();
+  assert.equal(trigger.activeIndex, -1);
+  trigger.dismiss(); // no-op
+  const idx1860 = MOMENTS.findIndex((m) => m.year === 1860);
+  assert.equal(trigger.evaluate(1860), idx1860, "toujours déclenché normalement ensuite");
+});
+
+test("cardTrigger.reset() : efface aussi une fermeture manuelle en cours", () => {
+  const trigger = createCardTrigger();
+  const idx1860 = MOMENTS.findIndex((m) => m.year === 1860);
+  assert.equal(trigger.evaluate(1860), idx1860);
+  trigger.dismiss();
+  trigger.reset();
+  assert.equal(trigger.activeIndex, -1);
+  assert.equal(trigger.evaluate(1860), idx1860, "reset() réarme, comme au tout début");
+});
+
+// ============================================================================
 // interpolatePopulation — interpolation log-échelle
 // ============================================================================
 

@@ -37,7 +37,9 @@
   border-radius: 24px;
   box-shadow: var(--pdma-glass-shadow);
   color: var(--pdma-cream);
-  padding: 18px 20px;
+  /* Marge droite réservée au ✕ (.pdma-card-close, position absolute) — la
+     carte ne pousse jamais son contenu sous le bouton. */
+  padding: 18px 54px 18px 20px;
   pointer-events: none;
   opacity: 0;
   transform: translateX(-36px) scale(0.96);
@@ -51,10 +53,12 @@
   pointer-events: auto;
 }
 
-/* Replié : ne montre plus que l'icône + l'année, en pastille cliquable. */
+/* Replié : ne montre plus que l'icône + l'année, en pastille cliquable — le ✕
+   (enfant direct de la carte, pas de .pdma-card-body) reste joignable pour
+   fermer complètement sans avoir à rouvrir. */
 .pdma-story-card.pdma-collapsed {
-  max-width: 150px;
-  padding: 10px 16px;
+  max-width: 190px;
+  padding: 10px 50px 10px 16px;
   cursor: pointer;
 }
 
@@ -192,16 +196,20 @@
   margin-bottom: 8px;
 }
 
-/* Bouton de fermeture : zone cliquable garantie >=48px, indépendante de la
-   taille visuelle du "✕" (même technique que .pdma-moment-btn::before). */
-.pdma-monument-label-close {
+/* Bouton de fermeture ✕ partagé (carte-récit + étiquette de monument, post-v2) :
+   zone cliquable garantie >=44px, indépendante de la taille visuelle du "✕"
+   (même technique que .pdma-moment-btn::before). Toujours en haut-droite du
+   conteneur (fixed/absolute) qui le porte — .pdma-card-close et
+   .pdma-monument-label-close n'ajoutent que leur position (identique ici,
+   mais gardées séparées pour pouvoir diverger sans toucher la base). */
+.pdma-close-btn {
   position: absolute;
   top: 6px;
   right: 6px;
   width: 48px;
   height: 48px;
-  min-width: 48px;
-  min-height: 48px;
+  min-width: 44px;
+  min-height: 44px;
   border: none;
   background: transparent;
   color: var(--pdma-cream);
@@ -210,6 +218,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 1;
+}
+
+.pdma-close-btn:hover {
+  color: var(--pdma-warm-3);
 }
 
 .pdma-monument-label-voice {

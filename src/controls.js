@@ -5,10 +5,16 @@
  * eased flyTo presets) without fighting a generic implementation.
  *
  * Gestures:
- *  - 1 finger / left-drag  -> orbit (azimuth + polar). Mouse-drag has its
- *    VERTICAL axis inverted on purpose (post-v1: dragging up now does what
- *    dragging down used to do) — touch/pen drags stay natural, only
- *    pointerType "mouse" is flipped. Horizontal is never inverted.
+ *  - 1 finger / left-drag  -> orbit (azimuth + polar).
+ *    - Mouse-drag has its VERTICAL axis inverted (post-v1: dragging up now
+ *      does what dragging down used to do). Horizontal stays natural.
+ *    - Touch-drag (post-v2, "navigation difficile" fix) has BOTH axes
+ *      inverted — dragging up<->down AND left<->right swapped relative to
+ *      touch's own pre-post-v2 behaviour. Vertical ends up matching mouse's
+ *      sign; horizontal ends up *opposite* of mouse's (mouse horizontal is
+ *      unchanged by this fix).
+ *    - Pen drags are untouched by either fix (stay fully natural on both
+ *      axes), same as touch/pen both were before post-v1.
  *  - 2 fingers pinch       -> zoom
  *  - 2 fingers drag / right-drag -> pan (moves the look-at target)
  *  - wheel                 -> zoom
@@ -151,17 +157,37 @@ export function panVectorFromKeys(keys, heading, dt, distance) {
 }
 
 /**
- * The signed vertical-orbit delta for a mouse-drag frame, with the vertical
- * axis inversion applied (post-v1: dragging up now does what dragging down
- * used to do, mouse only). Extracted as a pure one-liner so the sign flip
- * itself is unit-testable without any DOM/pointer machinery.
+ * The signed vertical-orbit delta for a drag frame, with the vertical axis
+ * inversion applied where relevant (post-v1: mouse drags invert it; post-v2:
+ * touch drags invert it too — see `verticalOrbitDelta`'s and
+ * `horizontalOrbitDelta`'s callers in `onPointerMove` below for exactly which
+ * pointer types set this flag). Extracted as a pure one-liner so the sign
+ * flip itself is unit-testable without any DOM/pointer machinery.
  * @param {number} dy pixels moved this frame (screen space, +down)
  * @param {number} speed radians per pixel (ORBIT_SPEED)
- * @param {boolean} invertVertical true for mouse drags, false for touch/pen
+ * @param {boolean} invertVertical true for mouse and touch drags, false for pen
  * @returns {number} dPhi
  */
 export function verticalOrbitDelta(dy, speed, invertVertical) {
   return (invertVertical ? -1 : 1) * dy * speed;
+}
+
+/**
+ * The signed horizontal-orbit delta for a drag frame (post-v2, "navigation
+ * difficile" fix). The non-inverted baseline (`invertHorizontal = false`,
+ * mouse/pen — unchanged by this fix) is `-dx * speed`, matching the sign
+ * `orbitBy` always used for `dTheta` before this helper existed. Touch drags
+ * pass `invertHorizontal = true`, flipping that sign — dragging left<->right
+ * now does what the other used to do, mirroring `verticalOrbitDelta`'s own
+ * inversion convention (extracted the same way, for the same reason: a pure
+ * one-liner testable without DOM/pointer machinery).
+ * @param {number} dx pixels moved this frame (screen space, +right)
+ * @param {number} speed radians per pixel (ORBIT_SPEED)
+ * @param {boolean} invertHorizontal true for touch drags, false for mouse/pen
+ * @returns {number} dTheta
+ */
+export function horizontalOrbitDelta(dx, speed, invertHorizontal) {
+  return (invertHorizontal ? 1 : -1) * dx * speed;
 }
 
 /**
@@ -287,8 +313,8 @@ export function createControls(camera, domElement, getState) {
 
   // --- Gesture math ---------------------------------------------------------
 
-  function orbitBy(dx, dy, dt, invertVertical) {
-    const dTheta = -dx * ORBIT_SPEED;
+  function orbitBy(dx, dy, dt, invertHorizontal, invertVertical) {
+    const dTheta = horizontalOrbitDelta(dx, ORBIT_SPEED, invertHorizontal);
     const dPhi = verticalOrbitDelta(dy, ORBIT_SPEED, invertVertical);
     theta += dTheta;
     phi = clamp(phi + dPhi, PHI_MIN, PHI_MAX);
@@ -370,9 +396,12 @@ export function createControls(camera, domElement, getState) {
       if (dragButton === 2) {
         panBy(dx, dy, dt);
       } else {
-        // Vertical-axis invert is mouse-only (post-v1) — touch/pen orbit
-        // stays natural (tablets shouldn't feel flipped).
-        orbitBy(dx, dy, dt, dragPointerType === "mouse");
+        // Post-v1: vertical invert for mouse. Post-v2: touch inverts BOTH
+        // axes ("navigation difficile" fix — drag-up<->down AND
+        // drag-left<->right swapped on mobile). Pen stays fully natural.
+        const isTouch = dragPointerType === "touch";
+        const invertVertical = dragPointerType === "mouse" || isTouch;
+        orbitBy(dx, dy, dt, isTouch, invertVertical);
       }
       applyClamps(dt);
       applyToCamera();

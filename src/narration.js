@@ -6,10 +6,15 @@
  *
  *  1. **Carte-récit** : quand `state.year` entre dans ±8 ans d'une ancre de
  *     `MOMENTS`, une carte glisse en bas-gauche (année géante, titre, récit,
- *     ligne « chez nous », 🔊). Une hystérésis (`createCardTrigger`) garantit
+ *     ligne « chez nous », 🔊, ✕). Une hystérésis (`createCardTrigger`) garantit
  *     qu'elle n'apparaît qu'une fois par franchissement, pas à chaque frame
  *     passée dans la zone. Elle se replie en pastille après 12 s (ou au tap
  *     ailleurs, ou en quittant la zone) ; un tap sur la pastille la rouvre.
+ *     Le ✕ (carte ouverte ou pastille) la ferme complètement, sans attendre
+ *     un repli automatique : `createCardTrigger.dismiss()` marque le moment
+ *     actif comme fermé, pour qu'il ne se redéclenche pas tant qu'on reste
+ *     autour de cette année — changer de moment (un autre index, ou sortir de
+ *     toute zone) réarme normalement (post-v2, "navigation difficile").
  *  2. **Voix** : `speechSynthesis`, voix française locale préférée, débit
  *     0,95. Le bouton global 🔊 (état partagé `state.voice`, déjà câblé par
  *     ui.js) déclenche la lecture automatique des cartes ; le bouton de la
@@ -60,11 +65,21 @@ const PULSE_UPDATE_PERIOD = 1 / 20;
  * *nouvellement* entré (une fois par franchissement), ou `null` si rien de
  * neuf. `activeIndex` vaut -1 quand `year` n'est dans la zone ±`threshold`
  * d'aucune ancre — c'est ce qui « réarme » le prochain passage.
+ *
+ * Post-v2 (bouton ✕ de la carte) : `dismiss()` marque le moment *actif* comme
+ * fermé par l'utilisateur — `evaluate` cesse alors de le redéclencher tant
+ * qu'on reste « autour de cette année-là », c'est-à-dire tant que ce même
+ * moment reste le plus proche, y compris si on ressort de sa zone puis y
+ * revient directement (sans traverser un autre moment). Entrer dans un
+ * moment *différent* (un autre index, ou -1 en sortant de toute zone) réarme
+ * ce moment normalement — cf. `dismissedIndex` ci-dessous.
  * @param {Array<{year:number}>} [moments]
  * @param {number} [threshold] en années
  */
 export function createCardTrigger(moments = MOMENTS, threshold = CARD_THRESHOLD_YEARS) {
   let activeIndex = -1;
+  let dismissedIndex = -1; // moment fermé manuellement par l'utilisateur pendant qu'il était actif
+
   return {
     /**
      * @param {number} year
@@ -82,17 +97,33 @@ export function createCardTrigger(moments = MOMENTS, threshold = CARD_THRESHOLD_
       }
       if (nearest === -1) {
         activeIndex = -1;
+        // Sortir de toute zone réarme tout, y compris une fermeture manuelle
+        // en cours (voir dismiss()) : on n'est plus « autour de cette année ».
+        dismissedIndex = -1;
         return null;
       }
-      if (nearest === activeIndex) return null;
+      // On quitte le moment fermé pour un autre : sa fermeture ne le
+      // concernait que lui, elle ne doit pas "coller" au prochain moment.
+      if (nearest !== dismissedIndex) dismissedIndex = -1;
+      if (nearest === activeIndex) return null; // toujours le même moment actif, fermé ou pas
       activeIndex = nearest;
+      if (nearest === dismissedIndex) return null; // ce moment précis a déjà été fermé, pas de redéclenchement
       return nearest;
     },
     get activeIndex() {
       return activeIndex;
     },
+    /**
+     * Ferme le moment actuellement actif (`activeIndex`) : `evaluate` ne le
+     * redéclenchera plus tant que `year` reste dans sa zone. Sans effet si
+     * aucun moment n'est actif (`activeIndex === -1`).
+     */
+    dismiss() {
+      dismissedIndex = activeIndex;
+    },
     reset() {
       activeIndex = -1;
+      dismissedIndex = -1;
     },
   };
 }
@@ -299,6 +330,22 @@ function buildCardDOM(root) {
   const storyCard = document.getElementById("story-card");
   storyCard.innerHTML = "";
 
+  // Bouton ✕ de fermeture (post-v2, "navigation difficile") : enfant direct
+  // de la carte (pas de `.pdma-card-body`) pour rester joignable même carte
+  // repliée en pastille — mêmes classes CSS (`.pdma-close-btn`) et même
+  // technique de zone cliquable généreuse indépendante de la taille visuelle
+  // que le ✕ de l'étiquette de monument (`buildLabelDOM` ci-dessous).
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "pdma-close-btn pdma-card-close";
+  closeBtn.setAttribute("aria-label", "Fermer");
+  closeBtn.textContent = "✕";
+  closeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    dismissCard();
+  });
+  storyCard.appendChild(closeBtn);
+
   const top = document.createElement("div");
   top.className = "pdma-card-top";
   const icon = document.createElement("span");
@@ -358,7 +405,7 @@ function buildLabelDOM(root) {
 
   const closeBtn = document.createElement("button");
   closeBtn.type = "button";
-  closeBtn.className = "pdma-monument-label-close";
+  closeBtn.className = "pdma-close-btn pdma-monument-label-close";
   closeBtn.setAttribute("aria-label", "Fermer");
   closeBtn.textContent = "✕";
   closeBtn.addEventListener("click", (e) => {
@@ -434,6 +481,21 @@ function expandCard() {
   cardShownAt = currentState.time; // rouvrir relance les 12 s
   syncCardMotionClass();
   dom.storyCard.classList.remove("pdma-collapsed");
+}
+
+/**
+ * ✕ de la carte (ouverte ou repliée en pastille) : la fait disparaître
+ * complètement — contrairement au repli automatique en pastille, ici rien ne
+ * reste cliquable. `cardTrigger.dismiss()` marque le moment actif comme fermé
+ * pour que `maybeTriggerCard` ne la redéclenche pas tant que `state.year`
+ * reste dans sa zone ±`CARD_THRESHOLD_YEARS` ; changer de moment (un autre
+ * index, ou sortir de toute zone) réarme normalement (voir createCardTrigger).
+ */
+function dismissCard() {
+  cardTrigger.dismiss();
+  cardShown = false;
+  cardCollapsed = false;
+  dom.storyCard.classList.remove("pdma-shown", "pdma-collapsed");
 }
 
 function maybeTriggerCard() {

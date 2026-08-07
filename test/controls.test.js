@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { panVectorFromKeys, verticalOrbitDelta, elevateTargetY, PRESETS } from "../src/controls.js";
+import { panVectorFromKeys, verticalOrbitDelta, horizontalOrbitDelta, elevateTargetY, PRESETS } from "../src/controls.js";
 
 // ============================================================================
 // panVectorFromKeys — ZQSD/WASD key-pan (post-v1)
@@ -90,6 +90,60 @@ test("verticalOrbitDelta: inverted -> opposite sign of dy (post-v1 mouse behavio
 test("verticalOrbitDelta: horizontal axis is untouched by this helper — only ever applied to dPhi, never dTheta (documented contract, not re-tested here beyond the sign check above)", () => {
   // Magnitude is preserved by the flip, only the sign changes.
   assert.equal(Math.abs(verticalOrbitDelta(7, 0.005, true)), Math.abs(verticalOrbitDelta(7, 0.005, false)));
+});
+
+// ============================================================================
+// horizontalOrbitDelta — touch-drag horizontal-orbit inversion (post-v2,
+// "navigation difficile" fix: touch inverts BOTH orbit axes, not just
+// vertical). The non-inverted baseline is `-dx*speed` — the sign `orbitBy`
+// always used for dTheta before this helper existed (mouse/pen, unchanged).
+// ============================================================================
+
+test("horizontalOrbitDelta: not inverted -> opposite sign of dx (pre-existing mouse/pen behaviour, unchanged)", () => {
+  assert.equal(horizontalOrbitDelta(10, 0.0055, false), -10 * 0.0055);
+  assert.equal(horizontalOrbitDelta(-10, 0.0055, false), 10 * 0.0055);
+});
+
+test("horizontalOrbitDelta: inverted -> same sign as dx (post-v2 touch behaviour — opposite of the non-inverted case above)", () => {
+  assert.equal(horizontalOrbitDelta(10, 0.0055, true), 10 * 0.0055);
+  assert.equal(horizontalOrbitDelta(-10, 0.0055, true), -10 * 0.0055);
+});
+
+test("horizontalOrbitDelta: inverted output is the exact opposite of the non-inverted output for the same dx (touch vs mouse/pen disagree on direction)", () => {
+  assert.equal(horizontalOrbitDelta(12, 0.0055, true), -horizontalOrbitDelta(12, 0.0055, false));
+});
+
+test("horizontalOrbitDelta: magnitude is preserved by the flip, only the sign changes (mirrors verticalOrbitDelta's own contract)", () => {
+  assert.equal(Math.abs(horizontalOrbitDelta(7, 0.0055, true)), Math.abs(horizontalOrbitDelta(7, 0.0055, false)));
+});
+
+// Post-v2: touch now inverts vertical too (previously only mouse did) — the
+// combination the fix is really about is "both axes flip for touch, relative
+// to touch's own pre-fix behaviour", which was the SAME formula mouse/pen use
+// (non-inverted on both helpers). This test pins down that composite claim
+// directly, independent of any wiring in controls.js's onPointerMove.
+test("post-v2 touch orbit: BOTH axes end up inverted relative to touch's own previous (non-inverted) behaviour", () => {
+  const dx = 50;
+  const dy = 50;
+  const speed = 0.0055;
+  // Touch's behaviour *before* this fix, on both axes, was the non-inverted
+  // formula (same as mouse/pen horizontal, and same as pre-post-v1 mouse
+  // vertical): dTheta = -dx*speed, dPhi = +dy*speed.
+  const thetaBefore = horizontalOrbitDelta(dx, speed, false);
+  const phiBefore = verticalOrbitDelta(dy, speed, false);
+  // Touch's behaviour *after* this fix (invertHorizontal=true, invertVertical=true).
+  const thetaAfter = horizontalOrbitDelta(dx, speed, true);
+  const phiAfter = verticalOrbitDelta(dy, speed, true);
+  assert.equal(thetaAfter, -thetaBefore, "theta must have flipped sign vs touch's previous behaviour");
+  assert.equal(phiAfter, -phiBefore, "phi must have flipped sign vs touch's previous behaviour");
+  // Mouse is untouched by this fix: horizontal stays non-inverted, vertical
+  // stays inverted (post-v1) — exactly the formulas `onPointerMove` passes
+  // for pointerType "mouse".
+  const thetaMouse = horizontalOrbitDelta(dx, speed, false);
+  const phiMouse = verticalOrbitDelta(dy, speed, true);
+  assert.equal(thetaMouse, thetaBefore, "mouse horizontal must be unchanged");
+  assert.equal(thetaAfter, -thetaMouse, "touch horizontal ends up opposite of mouse's (mouse unchanged)");
+  assert.equal(phiAfter, phiMouse, "touch vertical ends up matching mouse's post-v1 inverted formula");
 });
 
 // ============================================================================
