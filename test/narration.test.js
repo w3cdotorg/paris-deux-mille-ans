@@ -7,6 +7,9 @@ import {
   orderOfMagnitude,
   formatPopulation,
   resolveMonumentHit,
+  createOriginalTracker,
+  selectFrenchVoice,
+  configureUtterance,
   CARD_THRESHOLD_YEARS,
 } from "../src/narration.js";
 import { MOMENTS } from "../src/timeline.js";
@@ -190,4 +193,130 @@ test("resolveMonumentHit : cohérent avec monumentStatesAt — un hit sur un sit
     const found = resolveMonumentHit({ object: mesh }, year);
     assert.deepEqual(found, expected);
   }
+});
+
+// ============================================================================
+// createOriginalTracker — garde-fou contre la corruption du pulse ✨
+// (correctif review de la tâche 15 : recliquer ✨ en cours de pulse capturait
+// la valeur déjà teintée comme "base", corrompant les matériaux partagés
+// pour de bon à la fin du second pulse.)
+// ============================================================================
+
+test("createOriginalTracker : capture la valeur au premier appel, jamais recalculée ensuite", () => {
+  const tracker = createOriginalTracker();
+  const key = {};
+  let calls = 0;
+  const first = tracker.getOrCapture(key, () => {
+    calls++;
+    return "original";
+  });
+  assert.equal(first, "original");
+  assert.equal(calls, 1);
+  // Deuxième appel, même avec un captureFn qui renverrait autre chose : la
+  // valeur déjà mémorisée gagne toujours, et captureFn n'est même pas invoqué.
+  const second = tracker.getOrCapture(key, () => {
+    calls++;
+    return "tainted-by-a-pulse-in-flight";
+  });
+  assert.equal(second, "original");
+  assert.equal(calls, 1, "captureFn ne doit pas être rappelé une fois la clé connue");
+});
+
+test("createOriginalTracker : simule le double-clic ✨ — la base survit à une 'valeur courante' déjà teintée", () => {
+  const tracker = createOriginalTracker();
+  // Un objet mutable qui représente un THREE.Color d'emissive.
+  const material = { emissive: { hex: 0x000000, clone() { return { hex: this.hex }; } } };
+
+  // 1er ✨ : capture la vraie base (noir).
+  const base1 = tracker.getOrCapture(material, () => material.emissive.clone());
+  assert.equal(base1.hex, 0x000000);
+
+  // Le pulse teinte le matériau en cours de route (simulé directement, comme
+  // updateZonePulse le ferait avant la fin des 3 s).
+  material.emissive.hex = 0xfff2b0;
+
+  // 2e ✨ (re-clic avant la fin du 1er) : sans le tracker, on cloneraiit la
+  // valeur teintée courante (0xfff2b0) comme "base" — avec le tracker, on
+  // récupère bien la vraie base d'origine.
+  const base2 = tracker.getOrCapture(material, () => material.emissive.clone());
+  assert.equal(base2.hex, 0x000000, "la base doit rester la vraie couleur d'origine, pas la valeur teintée");
+  assert.equal(base1, base2, "même référence — jamais reclonée");
+});
+
+test("createOriginalTracker : has()/size() reflètent les clés connues, indépendamment entre clés", () => {
+  const tracker = createOriginalTracker();
+  const a = {};
+  const b = {};
+  assert.equal(tracker.has(a), false);
+  tracker.getOrCapture(a, () => 1);
+  assert.equal(tracker.has(a), true);
+  assert.equal(tracker.has(b), false);
+  assert.equal(tracker.size(), 1);
+  tracker.getOrCapture(b, () => 2);
+  assert.equal(tracker.size(), 2);
+});
+
+// ============================================================================
+// selectFrenchVoice — préférence de voix française (stubbée, sans DOM)
+// ============================================================================
+
+test("selectFrenchVoice : préfère une voix fr locale même si une voix fr distante existe", () => {
+  const voicesList = [
+    { lang: "en-US", localService: true },
+    { lang: "fr-FR", localService: false },
+    { lang: "fr-CA", localService: true },
+  ];
+  const chosen = selectFrenchVoice(voicesList);
+  assert.equal(chosen.lang, "fr-CA");
+  assert.equal(chosen.localService, true);
+});
+
+test("selectFrenchVoice : à défaut de voix fr locale, prend une voix fr distante", () => {
+  const voicesList = [
+    { lang: "en-US", localService: true },
+    { lang: "fr-FR", localService: false },
+  ];
+  const chosen = selectFrenchVoice(voicesList);
+  assert.equal(chosen.lang, "fr-FR");
+  assert.equal(chosen.localService, false);
+});
+
+test("selectFrenchVoice : null si aucune voix fr (que des non-fr)", () => {
+  const voicesList = [
+    { lang: "en-US", localService: true },
+    { lang: "de-DE", localService: true },
+  ];
+  assert.equal(selectFrenchVoice(voicesList), null);
+});
+
+test("selectFrenchVoice : null si la liste de voix est vide", () => {
+  assert.equal(selectFrenchVoice([]), null);
+});
+
+// ============================================================================
+// configureUtterance — réglages voix constants (stub SpeechSynthesisUtterance)
+// ============================================================================
+
+test("configureUtterance : pose lang='fr-FR', rate=0.95 et la voix fournie sur une utterance simulée", () => {
+  class FakeUtterance {
+    constructor(text) {
+      this.text = text;
+      this.lang = "en-US"; // valeur par défaut du navigateur, doit être écrasée
+      this.rate = 1;
+      this.voice = null;
+    }
+  }
+  const fakeVoice = { name: "Amélie", lang: "fr-FR" };
+  const utter = configureUtterance(new FakeUtterance("bonjour"), fakeVoice);
+  assert.equal(utter.lang, "fr-FR");
+  assert.equal(utter.rate, 0.95);
+  assert.equal(utter.voice, fakeVoice);
+  assert.equal(utter.text, "bonjour", "configureUtterance ne doit pas toucher au texte");
+});
+
+test("configureUtterance : renvoie l'instance elle-même (chaînable), pas une copie", () => {
+  class FakeUtterance {}
+  const instance = new FakeUtterance();
+  const returned = configureUtterance(instance, null);
+  assert.equal(returned, instance);
 });

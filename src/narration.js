@@ -217,13 +217,43 @@ function hasSpeech() {
   return typeof window !== "undefined" && !!window.speechSynthesis && typeof SpeechSynthesisUtterance !== "undefined";
 }
 
+/**
+ * Choisit la meilleure voix française dans une liste `SpeechSynthesisVoice`
+ * (ou tout objet `{lang, localService}` — testable sans DOM) : une voix `fr-*`
+ * *locale* de préférence (pas de latence réseau, dispo hors-ligne), sinon
+ * n'importe quelle voix `fr-*`, sinon `null` (aucune voix française). Pure —
+ * extraite pour être node-testable avec des tableaux de voix simulés.
+ * @param {Array<{lang?: string, localService?: boolean}>} voiceList
+ * @returns {object|null}
+ */
+export function selectFrenchVoice(voiceList) {
+  return (
+    voiceList.find((v) => v.lang?.toLowerCase().startsWith("fr") && v.localService) ||
+    voiceList.find((v) => v.lang?.toLowerCase().startsWith("fr")) ||
+    null
+  );
+}
+
+/**
+ * Configure un `SpeechSynthesisUtterance` (ou tout objet compatible — pure,
+ * testable avec une classe simulée) avec les réglages voix constants du
+ * projet : français, débit 0,95, et la voix choisie par `selectFrenchVoice`.
+ * @template T
+ * @param {T} utterance
+ * @param {object|null} voice
+ * @returns {T}
+ */
+export function configureUtterance(utterance, voice) {
+  utterance.lang = "fr-FR";
+  utterance.rate = 0.95;
+  utterance.voice = voice;
+  return utterance;
+}
+
 function refreshVoices() {
   if (!hasSpeech()) return;
   voices = window.speechSynthesis.getVoices();
-  frVoice =
-    voices.find((v) => v.lang?.toLowerCase().startsWith("fr") && v.localService) ||
-    voices.find((v) => v.lang?.toLowerCase().startsWith("fr")) ||
-    null;
+  frVoice = selectFrenchVoice(voices);
   if (dom) {
     configureVoiceButton(dom.cardVoiceBtn);
     configureVoiceButton(dom.labelVoiceBtn);
@@ -238,10 +268,7 @@ function refreshVoices() {
 function speak(text) {
   if (!hasSpeech() || !frVoice) return false;
   window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.lang = "fr-FR";
-  utter.rate = 0.95;
-  utter.voice = frVoice;
+  const utter = configureUtterance(new SpeechSynthesisUtterance(text), frVoice);
   window.speechSynthesis.speak(utter);
   return true;
 }
@@ -354,6 +381,19 @@ function buildLabelDOM(root) {
 
 // --- Carte-récit : affichage --------------------------------------------------
 
+/**
+ * Reflète `state.reducedMotion` sur la carte via une classe JS (`pdma-instant`),
+ * en plus du media query CSS `prefers-reduced-motion` déjà en place — celui-ci
+ * ne capte que le réglage *système*, alors que `state.reducedMotion` est aussi
+ * pilotable depuis l'appli elle-même (voir main.js) ; les deux doivent
+ * pouvoir désactiver l'animation indépendamment (belt-and-braces), comme le
+ * fait déjà tout le reste du code sur `state.reducedMotion` (life.js, rails.js,
+ * monuments.js, ghosts.js...).
+ */
+function syncCardMotionClass() {
+  dom.storyCard.classList.toggle("pdma-instant", !!currentState.reducedMotion);
+}
+
 function showCard(moment) {
   cardShown = true;
   cardCollapsed = false;
@@ -365,6 +405,7 @@ function showCard(moment) {
   dom.cardRecit.textContent = moment.recit;
   dom.cardCheznous.textContent = `🏠 ${moment.chezNous}`;
   configureVoiceButton(dom.cardVoiceBtn);
+  syncCardMotionClass();
   dom.storyCard.classList.add("pdma-shown");
   dom.storyCard.classList.remove("pdma-collapsed");
   if (currentState.voice) speak(`${moment.titre}. ${moment.recit} ${moment.chezNous}`);
@@ -372,6 +413,7 @@ function showCard(moment) {
 
 function collapseCard() {
   cardCollapsed = true;
+  syncCardMotionClass();
   dom.storyCard.classList.add("pdma-collapsed");
 }
 
@@ -379,6 +421,7 @@ function expandCard() {
   if (!cardShown) return;
   cardCollapsed = false;
   cardShownAt = currentState.time; // rouvrir relance les 12 s
+  syncCardMotionClass();
   dom.storyCard.classList.remove("pdma-collapsed");
 }
 
@@ -508,6 +551,42 @@ function attachOutsideTapHandling(ctx) {
 const HIGHLIGHT_COLOR = new THREE.Color(0xfff2b0);
 const _scratchColor = new THREE.Color();
 
+/**
+ * Suivi persistant « premier-vu-jamais-écrasé ». `getOrCapture(key, captureFn)`
+ * appelle `captureFn()` et mémorise le résultat *seulement* au tout premier
+ * appel pour cette `key` ; tous les appels suivants renvoient cette même
+ * valeur, sans jamais la recalculer — même si `key` est alors dans un état
+ * muté. C'est ce qui protège `startZonePulse` : sans ce garde-fou, recliquer
+ * ✨ en cours de pulse capturait comme "base" la valeur déjà teintée par le
+ * pulse en cours, et la restauration finale figeait cette teinte pour de bon
+ * (les matériaux sont partagés entre monuments via le cache `MATS` de
+ * `monumentModels.js` — la corruption devient visible sur toute la session).
+ * Pure, testable sans DOM/three.js : `key` est n'importe quel objet, `captureFn`
+ * une fonction qui "photographie" sa valeur actuelle.
+ * @returns {{getOrCapture: (key: any, captureFn: () => any) => any, has: (key: any) => boolean, size: () => number}}
+ */
+export function createOriginalTracker() {
+  const map = new Map();
+  return {
+    getOrCapture(key, captureFn) {
+      if (!map.has(key)) map.set(key, captureFn());
+      return map.get(key);
+    },
+    has(key) {
+      return map.has(key);
+    },
+    size() {
+      return map.size;
+    },
+  };
+}
+
+// Persistants au niveau module (jamais réinitialisés) : la toute première
+// valeur vue pour chaque matériau/groupe est LA valeur d'origine, pour
+// toujours — voir createOriginalTracker ci-dessus et collectPulseTargets.
+const emissiveOriginals = createOriginalTracker();
+const scaleOriginals = createOriginalTracker();
+
 let zonePulse = null; // { startTime, lastWrite, groups: [{group, baseScale}], materials: [{material, base}] }
 let haloRings = []; // construits une fois, réutilisés — un par site de MONUMENT_SITES
 let ringsHiddenAt = null;
@@ -541,11 +620,21 @@ function collectPulseTargets() {
   for (const g of groups) {
     g.traverse((child) => {
       const m = child.material;
-      if (m && m.emissive && !matSet.has(m)) matSet.set(m, m.emissive.clone());
+      if (m && m.emissive && !matSet.has(m)) {
+        // `emissiveOriginals` ne clone jamais qu'au tout premier passage sur ce
+        // matériau : si un pulse précédent est déjà en cours (double-clic ✨),
+        // `m.emissive` est actuellement teinté, mais on récupère malgré tout la
+        // *vraie* couleur d'origine capturée la première fois — jamais celle,
+        // corrompue, du pulse en cours.
+        matSet.set(m, emissiveOriginals.getOrCapture(m, () => m.emissive.clone()));
+      }
     });
   }
   return {
-    groups: groups.map((g) => ({ group: g, baseScale: g.scale.clone() })),
+    groups: groups.map((g) => ({
+      group: g,
+      baseScale: scaleOriginals.getOrCapture(g, () => g.scale.clone()),
+    })),
     materials: [...matSet.entries()].map(([material, base]) => ({ material, base })),
   };
 }
@@ -569,7 +658,21 @@ function updateStaticRings() {
   ringsHiddenAt = null;
 }
 
+/** Restaure exactement les couleurs/échelles d'origine du pulse en cours (s'il y en a un) et l'arrête. */
+function restoreZonePulse() {
+  if (!zonePulse) return;
+  for (const { material, base } of zonePulse.materials) material.emissive.copy(base);
+  for (const { group, baseScale } of zonePulse.groups) group.scale.copy(baseScale);
+  zonePulse = null;
+}
+
 function startZonePulse() {
+  // Recliquer ✨ pendant qu'un pulse tourne déjà : on le termine proprement
+  // d'abord (restauration exacte via les bases persistantes, jamais la
+  // valeur teintée du moment) avant d'en démarrer un nouveau — jamais de
+  // superposition qui capturerait une "base" déjà corrompue. Voir
+  // createOriginalTracker plus haut pour la garantie sous-jacente.
+  restoreZonePulse();
   if (currentState.reducedMotion) {
     showStaticRings();
     return;
@@ -581,9 +684,7 @@ function updateZonePulse() {
   if (!zonePulse) return;
   const t = currentState.time - zonePulse.startTime;
   if (t >= ZONE_PULSE_SECONDS) {
-    for (const { material, base } of zonePulse.materials) material.emissive.copy(base);
-    for (const { group, baseScale } of zonePulse.groups) group.scale.copy(baseScale);
-    zonePulse = null;
+    restoreZonePulse();
     return;
   }
   if (currentState.time - zonePulse.lastWrite < PULSE_UPDATE_PERIOD) return;
@@ -651,6 +752,10 @@ export function update(dt, state) {
   currentState = state;
   maybeTriggerCard();
   maybeAutoCollapse();
+  // Recale la classe JS d'animation instantanée à chaque frame — pas
+  // seulement aux transitions d'état de la carte — pour capter aussi le cas
+  // où `state.reducedMotion` change alors que la carte est déjà ouverte.
+  syncCardMotionClass();
   updateCounter(false);
   updateZonePulse();
   updateStaticRings();

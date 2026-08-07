@@ -235,6 +235,13 @@
   }
 }
 
+/* Pendant partenaire JS du media query ci-dessus : `state.reducedMotion` peut
+   être activé depuis l'appli elle-même (pas seulement le réglage système), et
+   narration.js pose cette classe en conséquence (voir syncCardMotionClass). */
+.pdma-story-card.pdma-instant {
+  transition: none;
+}
+
 @media (max-width: 520px) {
   .pdma-story-card {
     bottom: 128px;
