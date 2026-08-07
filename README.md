@@ -26,9 +26,16 @@ Le seul cas où `npm` sert, c'est pour faire tourner les tests automatiques
 
 **Sur la carte (doigt ou souris) :**
 
-- **Un doigt / clic-glisser** : tourner autour de la ville (orbite).
+- **Un doigt / clic-glisser** : tourner autour de la ville (orbite). À la souris,
+  l'axe **vertical** est inversé exprès (glisser vers le haut penche la caméra
+  comme glisser vers le bas le faisait avant) — c'est volontaire, pas un bug.
+  Au doigt (tablette), l'orbite reste naturelle, non inversée.
 - **Deux doigts (pincer) / molette** : zoomer, jusqu'au niveau des toits.
 - **Deux doigts qui glissent ensemble** : se déplacer sur la carte (pan).
+- **ZQSD** (ou **WASD** au clavier QWERTY — mêmes touches physiques) :
+  se déplacer librement sur la carte, dans la direction où regarde la caméra.
+  Avancer/reculer suit le cap actuel, tourner l'orbite change ce cap. La
+  vitesse s'adapte au zoom (plus rapide vue de loin, plus fine de près).
 
 **La grande frise en bas d'écran :**
 
@@ -56,6 +63,8 @@ main à tout moment en touchant la frise ou l'écran.
 **Clavier** (pratique avec une souris) :
 
 - **← / →** : avancer ou reculer dans le temps.
+- **ZQSD** (AZERTY) / **WASD** (QWERTY, mêmes touches physiques) : se déplacer
+  librement sur la carte (voir ci-dessus).
 - **1 / 2 / 3 / 4** : les quatre vues (ensemble / île de la Cité / chez nous / Tour Eiffel).
 - **Espace** : lancer ou mettre en pause la Lecture ▶️.
 

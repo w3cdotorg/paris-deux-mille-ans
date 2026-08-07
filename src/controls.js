@@ -5,10 +5,18 @@
  * eased flyTo presets) without fighting a generic implementation.
  *
  * Gestures:
- *  - 1 finger / left-drag  -> orbit (azimuth + polar)
+ *  - 1 finger / left-drag  -> orbit (azimuth + polar). Mouse-drag has its
+ *    VERTICAL axis inverted on purpose (post-v1: dragging up now does what
+ *    dragging down used to do) — touch/pen drags stay natural, only
+ *    pointerType "mouse" is flipped. Horizontal is never inverted.
  *  - 2 fingers pinch       -> zoom
  *  - 2 fingers drag / right-drag -> pan (moves the look-at target)
  *  - wheel                 -> zoom
+ *  - ZQSD / WASD keys      -> pan the target horizontally, relative to the
+ *    camera's current heading (see `panVectorFromKeys` below). Listened via
+ *    `e.code` KeyW/KeyA/KeyS/KeyD — the *physical* key position, which is
+ *    exactly where Z/Q/S/D sit on an AZERTY keyboard, so one set of
+ *    listeners covers both layouts without checking `e.key` or locale.
  *
  * Spherical convention (around `target`):
  *   x = target.x + radius * sin(phi) * sin(theta)
@@ -42,6 +50,12 @@ const PAN_SPEED = 0.0016; // world units per pixel per unit of radius
 const WHEEL_ZOOM_SPEED = 0.0016; // fraction of radius per wheel-delta unit
 const PINCH_ZOOM_SPEED = 0.01; // fraction of radius per pixel of pinch delta
 
+// ZQSD/WASD keyboard pan (post-v1). Speed is proportional to the current
+// camera distance so it feels right both zoomed in (slow, precise) and
+// zoomed out (fast enough to actually get somewhere) — see
+// `panVectorFromKeys` below.
+const KEY_PAN_SPEED = 0.6; // fraction of current distance, world units/sec
+
 const INERTIA_DECAY = 5.5; // exponential decay rate (per second)
 const INERTIA_STOP_EPS = 1e-4;
 
@@ -71,6 +85,68 @@ function clamp(v, min, max) {
 }
 
 // ============================================================================
+// Pure helpers (exported for unit tests — no THREE/DOM dependency)
+// ============================================================================
+
+/**
+ * ZQSD/WASD -> world-space pan delta for this frame, relative to the
+ * camera's current heading. `heading` is `theta`, the azimuth used by the
+ * spherical convention documented at the top of this file: forward (the
+ * horizontal projection of the camera's look direction, i.e. towards
+ * `target`) is `(-sin(heading), -cos(heading))`, and screen-right is
+ * `(cos(heading), -sin(heading))` — the same right/forward basis `panBy`
+ * already uses for drag-panning, so key-pan and drag-pan agree on which way
+ * is which.
+ *
+ * Diagonal input (e.g. forward+right) is normalized so moving diagonally
+ * isn't faster than moving along one axis. Returns `{dx:0, dz:0}` when no
+ * relevant key is held.
+ *
+ * @param {{forward?: boolean, back?: boolean, left?: boolean, right?: boolean}} keys
+ * @param {number} heading camera azimuth (theta), radians
+ * @param {number} dt seconds elapsed this frame
+ * @param {number} distance current camera distance (radius) — speed scales with it
+ * @returns {{dx: number, dz: number}}
+ */
+export function panVectorFromKeys(keys, heading, dt, distance) {
+  const forwardInput = (keys.forward ? 1 : 0) - (keys.back ? 1 : 0);
+  const rightInput = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+  if (!forwardInput && !rightInput) return { dx: 0, dz: 0 };
+
+  const sinH = Math.sin(heading);
+  const cosH = Math.cos(heading);
+  const fwdX = -sinH;
+  const fwdZ = -cosH;
+  const rightX = cosH;
+  const rightZ = -sinH;
+
+  let dirX = forwardInput * fwdX + rightInput * rightX;
+  let dirZ = forwardInput * fwdZ + rightInput * rightZ;
+  const len = Math.hypot(dirX, dirZ);
+  if (len > 0) {
+    dirX /= len;
+    dirZ /= len;
+  }
+
+  const speed = distance * KEY_PAN_SPEED;
+  return { dx: dirX * speed * dt, dz: dirZ * speed * dt };
+}
+
+/**
+ * The signed vertical-orbit delta for a mouse-drag frame, with the vertical
+ * axis inversion applied (post-v1: dragging up now does what dragging down
+ * used to do, mouse only). Extracted as a pure one-liner so the sign flip
+ * itself is unit-testable without any DOM/pointer machinery.
+ * @param {number} dy pixels moved this frame (screen space, +down)
+ * @param {number} speed radians per pixel (ORBIT_SPEED)
+ * @param {boolean} invertVertical true for mouse drags, false for touch/pen
+ * @returns {number} dPhi
+ */
+export function verticalOrbitDelta(dy, speed, invertVertical) {
+  return (invertVertical ? -1 : 1) * dy * speed;
+}
+
+// ============================================================================
 // Controls factory
 // ============================================================================
 
@@ -92,8 +168,14 @@ export function createControls(camera, domElement, getState) {
 
   const pointers = new Map(); // pointerId -> {x, y}
   let dragButton = null; // mouse button captured at gesture start (touch => 0)
+  let dragPointerType = null; // "mouse" | "touch" | "pen" — captured at gesture start
   let lastPinch = null; // {dist, midX, midY}
   let lastMoveTime = 0;
+
+  // ZQSD/WASD key-pan state (post-v1). Set by keydown/keyup below, consumed
+  // every frame in update() — no per-keypress movement, so holding a key
+  // gives smooth continuous motion regardless of OS key-repeat rate.
+  const keys = { forward: false, back: false, left: false, right: false };
 
   let flight = null; // {fromTarget, toTarget, fromRadius, toRadius, elapsed, duration}
 
@@ -157,9 +239,9 @@ export function createControls(camera, domElement, getState) {
 
   // --- Gesture math ---------------------------------------------------------
 
-  function orbitBy(dx, dy, dt) {
+  function orbitBy(dx, dy, dt, invertVertical) {
     const dTheta = -dx * ORBIT_SPEED;
-    const dPhi = dy * ORBIT_SPEED;
+    const dPhi = verticalOrbitDelta(dy, ORBIT_SPEED, invertVertical);
     theta += dTheta;
     phi = clamp(phi + dPhi, PHI_MIN, PHI_MAX);
     if (dt > 0) {
@@ -212,6 +294,7 @@ export function createControls(camera, domElement, getState) {
     lastMoveTime = performance.now();
     if (pointers.size === 1) {
       dragButton = e.button === 2 ? 2 : 0;
+      dragPointerType = e.pointerType;
     } else if (pointers.size === 2) {
       const pts = Array.from(pointers.values());
       lastPinch = {
@@ -239,7 +322,9 @@ export function createControls(camera, domElement, getState) {
       if (dragButton === 2) {
         panBy(dx, dy, dt);
       } else {
-        orbitBy(dx, dy, dt);
+        // Vertical-axis invert is mouse-only (post-v1) — touch/pen orbit
+        // stays natural (tablets shouldn't feel flipped).
+        orbitBy(dx, dy, dt, dragPointerType === "mouse");
       }
       applyClamps();
       applyToCamera();
@@ -271,7 +356,10 @@ export function createControls(camera, domElement, getState) {
       /* ignore */
     }
     if (pointers.size < 2) lastPinch = null;
-    if (pointers.size === 0) dragButton = null;
+    if (pointers.size === 0) {
+      dragButton = null;
+      dragPointerType = null;
+    }
     if (getState().reducedMotion) stopInertia();
   }
 
@@ -289,12 +377,57 @@ export function createControls(camera, domElement, getState) {
     e.preventDefault();
   }
 
+  // --- ZQSD/WASD key-pan -------------------------------------------------
+  // Listened on `window` (like main.js's arrow-key handler) rather than
+  // `domElement`, since keyboard events target whatever has DOM focus, not
+  // necessarily the canvas. `e.code` is the *physical* key position
+  // (locale-independent), so KeyW/KeyA/KeyS/KeyD is exactly Z/Q/S/D on an
+  // AZERTY keyboard and W/A/S/D on QWERTY — one listener, both layouts, no
+  // `e.key` string-matching. Modifier combos (Cmd/Ctrl/Alt) are left alone
+  // so browser/OS shortcuts on those same physical keys keep working.
+
+  function keyFromCode(code) {
+    switch (code) {
+      case "KeyW":
+        return "forward";
+      case "KeyS":
+        return "back";
+      case "KeyA":
+        return "left";
+      case "KeyD":
+        return "right";
+      default:
+        return null;
+    }
+  }
+
+  function onKeyDown(e) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const dir = keyFromCode(e.code);
+    if (!dir) return;
+    if (!keys[dir]) {
+      // Edge-triggered: only on the false->true transition, so holding the
+      // key doesn't keep re-cancelling anything every OS key-repeat tick.
+      if (flight) cancelFlight();
+      stopInertia();
+      idleTime = 0;
+    }
+    keys[dir] = true;
+  }
+
+  function onKeyUp(e) {
+    const dir = keyFromCode(e.code);
+    if (dir) keys[dir] = false;
+  }
+
   domElement.addEventListener("pointerdown", onPointerDown);
   domElement.addEventListener("pointermove", onPointerMove);
   domElement.addEventListener("pointerup", onPointerUp);
   domElement.addEventListener("pointercancel", onPointerUp);
   domElement.addEventListener("wheel", onWheel, { passive: false });
   domElement.addEventListener("contextmenu", onContextMenu);
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
 
   // --- Public API -------------------------------------------------------------
 
@@ -340,6 +473,20 @@ export function createControls(camera, domElement, getState) {
    * @param {number} dt seconds
    */
   function update(dt) {
+    // ZQSD/WASD key-pan takes priority every frame it's active: it's
+    // direct user input (not ambient animation), so it runs even under
+    // reducedMotion, and it already cancelled any flyTo/inertia at the
+    // keydown edge above — no need to re-check those here.
+    if (keys.forward || keys.back || keys.left || keys.right) {
+      const { dx, dz } = panVectorFromKeys(keys, theta, dt, radius);
+      target.x += dx;
+      target.z += dz;
+      applyClamps();
+      applyToCamera();
+      idleTime = 0;
+      return;
+    }
+
     if (flight) {
       flight.elapsed += dt;
       const t = clamp(flight.elapsed / flight.duration, 0, 1);
@@ -412,6 +559,8 @@ export function createControls(camera, domElement, getState) {
     domElement.removeEventListener("pointercancel", onPointerUp);
     domElement.removeEventListener("wheel", onWheel);
     domElement.removeEventListener("contextmenu", onContextMenu);
+    window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("keyup", onKeyUp);
   }
 
   // Initial placement (matches the original fixed camera exactly).
@@ -426,5 +575,15 @@ export function createControls(camera, domElement, getState) {
     get target() {
       return target.clone();
     },
+    // Debug/verification hook (main.js re-exposes this on window.__paris) —
+    // lets Playwright read theta/phi/radius/target/keys without reaching
+    // into module-private state.
+    debugState: () => ({
+      target: target.clone(),
+      theta,
+      phi,
+      radius,
+      keys: { ...keys },
+    }),
   };
 }

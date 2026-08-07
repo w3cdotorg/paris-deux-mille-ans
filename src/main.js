@@ -341,6 +341,10 @@ window.__paris = {
   },
   setYear,
   flyTo: (name, duration) => controls.flyTo(name, duration),
+  // Post-v1 ZQSD/WASD pan + inverted mouse-orbit vertical — verification hook.
+  controls: {
+    debugState: () => controls.debugState(),
+  },
   camera,
   buildingStats: () => buildings.stats(),
   debugCounts: (year) => buildings.debugCounts(year ?? state.year),
