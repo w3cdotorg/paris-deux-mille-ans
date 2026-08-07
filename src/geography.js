@@ -113,13 +113,19 @@ export const LANDMARKS = {
   // --- sites de monuments ajoutés par la tâche 11 --------------------------
   operaGarnier: { x: -135, z: -135 },
   tourMontparnasse: { x: -120, z: 95 },
-  // Pont au Change : calé pour franchir *réellement* le ruban de Seine rendu
-  // par terrain.js (demi-largeur 7 autour de l'axe, voir buildRiverGeometry).
-  // L'axe passe par (0,0) puis (-40,-15) : la normale « vers le nord » vaut
-  // donc (0,351 ; -0,937). Départ sur la berge nord de l'île vers x=-10
-  // (|z| = 2,8 à cet endroit), arrivée sur la rive droite après ~8,4 unités,
-  // soit au-delà du bord nord de l'eau (z ≈ -9,6 pour x ≈ -5,5).
-  pontAuChange: { x: -8.6, z: -6.6 },
+  // Pont au Change : calé pour franchir *réellement* le bras nord de la Seine
+  // rendu par terrain.js. L'axe du fleuve passe par (0,0) puis (-40,-15) : la
+  // normale « vers le nord » vaut donc (0,351 ; -0,937), et le pont suit cette
+  // normale (voir `rotY` dans monuments.js).
+  //
+  // Post-v2 : recalé de (-8,6 ; -6,6) à (-7,8 ; -8,73) parce que le bras nord
+  // s'élargit désormais à 12 unités autour de l'île (voir
+  // `SEINE_ISLAND_HALF_WIDTH`). Mesuré le long de l'axe du pont, la rive de
+  // l'île est à -4,15 et le bord nord de l'eau à +8,70 (origine : l'ancien
+  // centre) : la travée à franchir vaut 12,85 unités, d'où un tablier de 15,6
+  // (`BRIDGE_LEN`) centré au milieu de cette travée, qui prend appui 1,4 unité
+  // dans l'île et 1,8 sur la rive droite.
+  pontAuChange: { x: -7.8, z: -8.73 },
   // Tour Saint-Jacques (48,8580 N, 2,3488 E environ) : rive droite, au nord
   // du pont au Change, dans l'axe nord-sud de l'île. Repositionnée un peu à
   // l'écart de rueDeRivoli (roads.js) — le tracé Louvre→Bastille passe à
@@ -332,9 +338,126 @@ export const SEINE_POINTS = [
 
 export const ISLANDS = {
   cite: { x: 0, z: 0, rx: 12, rz: 5 },
-  saintLouis: { x: 35, z: 8, rx: 8, rz: 3 },
+  // Post-v2 (« l'île est une terre au milieu du fleuve ») : Saint-Louis était
+  // en (35, 8), soit 8,6 unités *au nord* de l'axe du fleuve — donc hors de
+  // l'eau (demi-largeur 7). Elle se lisait comme une bosse de berge, jamais
+  // comme une île : aucun bras au nord, un bras au sud à peine amorcé. Elle est
+  // désormais posée SUR l'axe, juste en amont (à l'est) de la Cité, exactement
+  // comme le pont Saint-Louis relie les deux dans la réalité. Le point (24 ;
+  // 11,5) est sur le tracé de `SEINE_POINTS` entre (30, 15) et (0, 0), à ~0,6
+  // unité de la courbe Catmull-Rom réellement rendue par terrain.js ; il laisse
+  // ~12 unités d'eau entre les deux îles. Écart assumé avec le WGS84 (l'île
+  // réelle serait vers (52, 17)) : le tracé du fleuve, lui, est déjà stylisé et
+  // passe à z ≈ 30 pour x = 52 — poser l'île à ses coordonnées « vraies » la
+  // remettrait sur la berge, ce que ce correctif corrige précisément.
+  saintLouis: { x: 24, z: 11.5, rx: 8, rz: 3 },
   louviers: { x: 120, z: 18, rx: 5, rz: 2, died: 1843 },
 };
+
+/** Les deux îles géographiques permanentes (Louviers meurt en 1843, cf. ISLANDS). */
+const PERMANENT_ISLANDS = [ISLANDS.cite, ISLANDS.saintLouis];
+
+/**
+ * Le point (x, z) est-il sur la terre ferme d'une île permanente (Cité ou
+ * Saint-Louis) ? Source unique partagée : `buildings.js` s'en sert pour
+ * exempter les îles de la marge d'eau, `life.js` pour laisser la foule y
+ * marcher, `terrain.js` pour les surélever. Louviers en est volontairement
+ * exclue (bras mort + disparition en 1843, cf. ISLANDS).
+ * @param {number} x
+ * @param {number} z
+ * @returns {boolean}
+ */
+export function isOnPermanentIsland(x, z) {
+  for (const isl of PERMANENT_ISLANDS) {
+    if (insideEllipse(x, z, isl.x, isl.z, isl.rx, isl.rz)) return true;
+  }
+  return false;
+}
+
+// ============================================================================
+// Largeur de la Seine — le lit s'élargit autour des îles
+// ============================================================================
+//
+// Post-v2 : le ruban de Seine avait une demi-largeur constante de 7 (14 unités,
+// 140 m), et l'île de la Cité — une ellipse 12×5 centrée SUR l'axe — occupait
+// à elle seule 6,24 unités de part et d'autre de cet axe (sa demi-largeur
+// mesurée le long de la normale au fleuve). Il ne restait donc que 0,76 unité
+// d'eau de chaque côté : à l'écran, aucun bras, un unique bourrelet sombre.
+//
+// La Seine réelle est justement plus large à cet endroit (~250-300 m d'une rive
+// à l'autre en comptant l'île, contre ~150 m en aval), donc élargir localement
+// est à la fois le correctif visuel ET le fait géographique. À 12 unités de
+// demi-largeur, chaque bras mesure ~6 unités (60 m) au plus étroit — lisible
+// même sur un écran de téléphone.
+//
+// L'élargissement est une fonction **de la position**, pas du paramètre de
+// courbe : c'est ce qui permet à tous les consommateurs (le ruban d'eau, la
+// teinte du sol, les marges du bâti, de la foule, des arbres, des fenêtres
+// éclairées) de poser exactement la même question — « où est le bord de
+// l'eau ? » — sans qu'aucun ne garde sa propre copie de la géométrie.
+
+/** Demi-largeur du lit de la Seine loin de toute île (largeur totale 14 = 140 m). */
+export const SEINE_HALF_WIDTH = 7;
+/** Demi-largeur du lit autour de la Cité et de Saint-Louis (largeur totale 24 = 240 m). */
+export const SEINE_ISLAND_HALF_WIDTH = 12;
+/** Longueur (unités) sur laquelle l'élargissement se résorbe autour d'une île. */
+const SEINE_WIDENING_FADE = 18;
+
+/**
+ * Influence des îles sur le lit du fleuve en (x, z) : 1 sur toute l'emprise
+ * d'une île (plus 2 unités de marge), 0 au-delà de `SEINE_WIDENING_FADE`, avec
+ * un `smoothstep` entre les deux — donc un évasement progressif du fleuve,
+ * jamais une marche. Mesurée en distance euclidienne au centre de l'île (et non
+ * le long de l'axe) : moins cher, et l'écart est invisible puisque seul compte
+ * ce que vaut cette fonction *dans* le lit du fleuve.
+ * @param {number} x
+ * @param {number} z
+ * @returns {number} dans [0, 1]
+ */
+export function seineIslandInfluence(x, z) {
+  let best = 0;
+  for (const isl of PERMANENT_ISLANDS) {
+    const d = distance(x, z, isl.x, isl.z);
+    const full = isl.rx + 2;
+    const fade = isl.rx + SEINE_WIDENING_FADE;
+    const t = smoothstep(clamp((fade - d) / (fade - full), 0, 1));
+    if (t > best) best = t;
+  }
+  return best;
+}
+
+/**
+ * Demi-largeur du lit de la Seine « en face de » (x, z) : `SEINE_HALF_WIDTH`
+ * partout, `SEINE_ISLAND_HALF_WIDTH` autour des deux îles.
+ * @param {number} x
+ * @param {number} z
+ * @returns {number}
+ */
+export function seineHalfWidthAt(x, z) {
+  return (
+    SEINE_HALF_WIDTH +
+    (SEINE_ISLAND_HALF_WIDTH - SEINE_HALF_WIDTH) * seineIslandInfluence(x, z)
+  );
+}
+
+/**
+ * (x, z) est-il dans l'eau (bord de l'eau élargi de `margin`) ? La terre ferme
+ * des deux îles n'est jamais « dans l'eau », quelle que soit la marge : c'est
+ * ce qui permet aux huttes gauloises, à Notre-Dame et à la foule de tenir sur
+ * une île entièrement entourée de fleuve.
+ *
+ * Loin des îles, `isOverSeineWater(x, z, 2)` équivaut exactement à l'ancien
+ * `distanceToSeine(x, z) < 9` de buildings.js (7 + 2) : les marges historiques
+ * des consommateurs sont conservées, elles suivent simplement l'élargissement.
+ * @param {number} x
+ * @param {number} z
+ * @param {number} [margin] marge de berge ajoutée à la demi-largeur
+ * @returns {boolean}
+ */
+export function isOverSeineWater(x, z, margin = 0) {
+  if (isOnPermanentIsland(x, z)) return false;
+  return distanceToSeine(x, z) < seineHalfWidthAt(x, z) + margin;
+}
 
 // ============================================================================
 // heightAt — relief

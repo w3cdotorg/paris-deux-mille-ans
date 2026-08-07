@@ -380,6 +380,10 @@ window.__paris = {
     debugState: () => controls.debugState(),
   },
   camera,
+  // Post-v2 « la Seine et ses îles » : maillages d'île construits, altitude du
+  // plateau de la Cité et du plan d'eau juste à côté — de quoi vérifier
+  // mécaniquement que l'île émerge bien du fleuve (voir terrain.stats()).
+  terrainStats: () => terrain.stats(),
   buildingStats: () => buildings.stats(),
   debugCounts: (year) => buildings.debugCounts(year ?? state.year),
   wallCounts: (year) => walls.debugCounts(year ?? state.year),

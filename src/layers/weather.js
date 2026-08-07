@@ -43,11 +43,12 @@ import { MOMENTS } from "../timeline.js";
 import { momentBlend, lerp, smoothstep } from "../timeEngine.js";
 import {
   urbanYear,
-  distanceToSeine,
+  isOverSeineWater,
+  seineHalfWidthAt,
   insideMonumentFootprint,
   SEINE_POINTS,
 } from "../geography.js";
-import { groundHeightAt } from "./terrain.js";
+import { groundHeightAt, seineWaterHeightAt } from "./terrain.js";
 
 // ============================================================================
 // Tunables
@@ -129,12 +130,21 @@ const WINDOW_REPOSITION_DISTANCE = 90;
 const WINDOW_REPOSITION_YEARS = 12;
 /** Intervalle minimum (s) entre deux repositionnements. */
 const WINDOW_REPOSITION_INTERVAL = 0.45;
-/** Une fenêtre n'est jamais posée sur l'eau. */
-const WINDOW_RIVER_CLEARANCE = 9;
+/**
+ * Une fenêtre n'est jamais posée sur l'eau. Marge mesurée depuis le **bord de
+ * l'eau** (post-v2) : 2 unités, soit exactement l'ancienne constante de 9
+ * mesurée depuis l'axe là où le lit fait 7 de demi-largeur, mais qui suit
+ * l'évasement du fleuve autour des îles.
+ */
+const WINDOW_BANK_MARGIN = 2;
 /** Exposant du tirage radial du semis (0,5 = uniforme, >0,5 = centré). */
 const WINDOW_RADIAL_BIAS = 0.62;
 
-const FIRE_BANK_OFFSET = 13; // distance à l'axe de la Seine : sur la berge
+// Distance des brasiers du siège au bord de l'eau (post-v2 : mesurée depuis le
+// bord et non depuis l'axe — devant l'île le lit fait 12 de demi-largeur, et
+// l'ancienne constante de 13 posait les feux à une unité de la rive, donc à
+// moitié dans le fleuve).
+const FIRE_BANK_MARGIN = 5;
 const FIRE_LIGHT_DISTANCE = 95;
 const FIRE_LIGHT_INTENSITY = 95; // candela (three r180 : décroissance physique)
 
@@ -878,7 +888,7 @@ export function generateWindowSlots(year, cx, cz, radius, count, seed = 0) {
     const a = hash01(k, seed, 202) * Math.PI * 2;
     const x = cx + r * Math.cos(a);
     const z = cz + r * Math.sin(a);
-    if (distanceToSeine(x, z) < WINDOW_RIVER_CLEARANCE) continue;
+    if (isOverSeineWater(x, z, WINDOW_BANK_MARGIN)) continue;
     if (!(urbanYear(x, z) <= year)) continue;
     if (insideMonumentFootprint(x, z)) continue;
     slots.push({
@@ -939,8 +949,12 @@ export function generateLampSlots(count, seed = 0) {
       const dz = bz - az;
       const len = Math.hypot(dx, dz) || 1;
       const side = v < 0.5 ? 1 : -1;
-      x = px + (-dz / len) * 12 * side;
-      z = pz + (dx / len) * 12 * side;
+      // Post-v2 : le quai se cale sur le bord de l'eau + 3 au lieu d'un 12
+      // absolu — devant les îles le lit fait 12 de demi-largeur, et les becs de
+      // gaz s'y retrouvaient pile sur la ligne d'eau.
+      const quai = seineHalfWidthAt(px, pz) + 3;
+      x = px + (-dz / len) * quai * side;
+      z = pz + (dx / len) * quai * side;
     }
     slots.push({ x, z, tint: hash01(k, seed, 44) });
   }
@@ -1429,11 +1443,12 @@ function buildFires(ctx) {
     const dx = b.x - a.x;
     const dz = b.z - a.z;
     const len = Math.hypot(dx, dz) || 1;
-    const x = px + (-dz / len) * FIRE_BANK_OFFSET * spec.side;
-    const z = pz + (dx / len) * FIRE_BANK_OFFSET * spec.side;
-    // La berge : le maillage du sol retombe dans le lit du fleuve près de
-    // l'axe, donc on plancher à 0,2 pour ne pas noyer le brasier.
-    const y = Math.max(groundHeightAt(x, z), 0.2) + 0.8;
+    const offset = seineHalfWidthAt(px, pz) + FIRE_BANK_MARGIN;
+    const x = px + (-dz / len) * offset * spec.side;
+    const z = pz + (dx / len) * offset * spec.side;
+    // Sur la berge, jamais sous le plan d'eau : le brasier se pose au sol rendu,
+    // avec le niveau de la Seine pour plancher.
+    const y = Math.max(groundHeightAt(x, z), seineWaterHeightAt(x, z)) + 0.8;
 
     const light = new THREE.PointLight(0xff7a2a, 0, FIRE_LIGHT_DISTANCE, 2);
     light.position.set(x, y + 1.2, z);

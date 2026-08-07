@@ -40,9 +40,9 @@
  */
 
 import * as THREE from "three";
-import { LANDMARKS, RINGS } from "../geography.js";
+import { LANDMARKS, RINGS, isOverSeineWater } from "../geography.js";
 import { lifecycle, easeOutBack } from "../timeEngine.js";
-import { groundHeightAt } from "./terrain.js";
+import { groundHeightAt, seineWaterHeightAt } from "./terrain.js";
 import { wallRingPlan, sampleEllipsePoints, BOULEVARDS } from "./walls.js";
 
 function clamp01(v) {
@@ -349,6 +349,26 @@ const ROAD_THICKNESS = 0.05;
 // à 0,06 - 0,025 = 0,035 au-dessus de `groundHeightAt` — jamais coïncidente
 // avec le maillage de terrain, jamais assez haute pour paraître en lévitation.
 const ROAD_Y_OFFSET = 0.06;
+// Franchissement du fleuve (post-v2). Le cardo est le seul axe de la table qui
+// traverse la Seine (deux fois, par le Petit-Pont puis le pont au Change). Tant
+// que le plan d'eau était enfoui sous le terrain, la chaussée s'y peignait à plat
+// sans que ça se voie ; maintenant que la Seine est rendue *au-dessus* du sol, un
+// ruban posé à ROAD_Y_OFFSET passerait dessous et la rue s'interromprait au
+// milieu du fleuve. Les tronçons au-dessus de l'eau sont donc portés en tablier,
+// 0,55 au-dessus du plan d'eau : le pont que la table sous-entendait déjà.
+const ROAD_DECK_LIFT = 0.55;
+
+/**
+ * Altitude du dessous d'un tronçon de chaussée : le sol rendu, ou un tablier
+ * au-dessus du plan d'eau si le tronçon franchit la Seine.
+ * @param {number} x
+ * @param {number} z
+ * @returns {number}
+ */
+function roadBaseY(x, z) {
+  if (isOverSeineWater(x, z)) return seineWaterHeightAt(x, z) + ROAD_DECK_LIFT;
+  return groundHeightAt(x, z);
+}
 
 // ============================================================================
 // Scratch three.js — réutilisé, jamais alloué dans update
@@ -429,7 +449,7 @@ function applyRoads(year) {
         continue;
       }
       const seg = entry.plan.segments[i];
-      const groundY = groundHeightAt(seg.midX, seg.midZ);
+      const groundY = roadBaseY(seg.midX, seg.midZ);
       mesh.setMatrixAt(
         idx,
         composeFlat(

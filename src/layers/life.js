@@ -71,11 +71,12 @@ import {
   SEINE_POINTS,
   SEINE_ONMAP_COUNT,
   urbanYear,
-  distanceToSeine,
+  isOverSeineWater,
+  seineIslandInfluence,
 } from "../geography.js";
 import { lerp, smoothstep, momentBlend } from "../timeEngine.js";
 import { MOMENTS } from "../timeline.js";
-import { groundHeightAt } from "./terrain.js";
+import { groundHeightAt, seineWaterHeightAt } from "./terrain.js";
 import { ringPoint, ringYaw, shuttleAt } from "./rails.js";
 
 function clamp01(v) {
@@ -464,6 +465,34 @@ function buildBoats(ctx) {
   }
 }
 
+// Hauteur de flottaison d'une coque au-dessus du plan d'eau.
+const BOAT_DRAFT = 0.06;
+// Décalage latéral du chenal navigable en passant les îles : le **bras nord**
+// (grand bras), historiquement le bras navigable de la Seine à Paris. L'axe de
+// la courbe traverse l'île de la Cité de part en part — sans ce détour, la
+// flotte escaladerait l'île maintenant qu'elle est une vraie terre émergée. 9
+// unités place la coque au milieu du bras nord (rive de l'île à ~6,2 de l'axe,
+// bord de l'eau à 12).
+const BOAT_ISLAND_ARM_OFFSET = 9;
+// L'étalement latéral aléatoire des bateaux (±4,5) est resserré à ±1,6 dans le
+// bras, qui ne fait que ~5,8 de large : sans ça, un bateau sur trois montait sur
+// la berge ou sur l'île.
+const BOAT_ISLAND_SPREAD = 0.35;
+
+/**
+ * Décalage latéral effectif d'un bateau : son tirage aléatoire loin des îles,
+ * ramené dans le bras nord en les longeant. Pure, testable.
+ * @param {number} baseLateral tirage propre au bateau, dans [-4.5, 4.5]
+ * @param {number} x position sur l'axe du fleuve
+ * @param {number} z
+ * @returns {number}
+ */
+export function boatLateral(baseLateral, x, z) {
+  const island = seineIslandInfluence(x, z);
+  if (island <= 0) return baseLateral;
+  return lerp(baseLateral, BOAT_ISLAND_ARM_OFFSET + baseLateral * BOAT_ISLAND_SPREAD, island);
+}
+
 function updateBoats(state) {
   if (river.length <= 0) return;
   const time = state.reducedMotion ? 0 : state.time;
@@ -483,10 +512,20 @@ function updateBoats(state) {
     }
     const { point, tangent } = riverPointAndTangent(t);
     const yaw = Math.atan2(-tangent.z, tangent.x);
+    // (nx, nz) = la normale « vers le nord » du fleuve (rive droite) : c'est le
+    // signe positif de `lateral`.
     const nx = Math.sin(yaw);
     const nz = Math.cos(yaw);
+    const lateral = boatLateral(b.lateral, point.x, point.z);
     const bob = state.reducedMotion ? 0 : Math.sin(time * 1.1 + b.bobPhase) * 0.03;
-    b.group.position.set(point.x + nx * b.lateral, 0.02 + bob, point.z + nz * b.lateral);
+    const px = point.x + nx * lateral;
+    const pz = point.z + nz * lateral;
+    // Post-v2 : `seineWaterHeightAt` et non 0,02. L'axe navigable traverse le
+    // centre de Paris, dont le sol *rendu* culmine à +4 (relief exagéré ×2,6) :
+    // une altitude absolue enterrait toute la flotte, exactement comme elle
+    // enterrait le plan d'eau. Les bateaux flottent maintenant sur la Seine, où
+    // qu'elle passe.
+    b.group.position.set(px, seineWaterHeightAt(px, pz) + BOAT_DRAFT + bob, pz);
     b.group.rotation.set(0, yaw, state.reducedMotion ? 0 : Math.sin(time * 0.9 + b.bobPhase) * 0.02);
     b.group.scale.setScalar(presence);
     if (b.wheel) {
@@ -514,7 +553,11 @@ const CROWD_HOTSPOTS = [
   { x: LANDMARKS.tourEiffel.x, z: LANDMARKS.tourEiffel.z + 18, r: 15, weight: 3 },
   { x: LANDMARKS.chezNous.x, z: LANDMARKS.chezNous.z, r: 11, weight: 2 },
   { x: LANDMARKS.sacreCoeur.x, z: LANDMARKS.sacreCoeur.z + 12, r: 11, weight: 1 },
-  { x: LANDMARKS.pontAuChange.x, z: LANDMARKS.pontAuChange.z - 8, r: 9, weight: 2 },
+  // Post-v2 : reculé de -8 à -11 en z. Le bras nord s'élargit à 12 unités devant
+  // l'île, et le pont lui-même a été recalé plus au nord : à -8 le centre du
+  // hotspot n'était plus qu'à 1,9 unité du bord de l'eau, donc l'essentiel du
+  // semis (rayon 9) tombait dans le fleuve et épuisait les re-tirages.
+  { x: LANDMARKS.pontAuChange.x, z: LANDMARKS.pontAuChange.z - 11, r: 9, weight: 2 },
   { x: LANDMARKS.pantheon.x, z: LANDMARKS.pantheon.z, r: 10, weight: 1 },
   { x: LANDMARKS.invalides.x, z: LANDMARKS.invalides.z + 10, r: 10, weight: 1 },
 ];
@@ -538,15 +581,19 @@ function riverbankHotspots() {
 }
 
 /**
- * Distance minimale (unités monde) qu'un emplacement de foule doit garder
- * avec la Seine. Le lit navigable a un demi-largeur de rendu ~7u (voir
- * `terrain.js`/`SEINE_BANK_OFFSET`) ; en dessous de ce seuil `groundHeightAt`
- * retombe sur le lit du fleuve (~-1,5) et la silhouette apparaît coulée. Le
- * hotspot du Pont-au-Change (centre à ~10,65u de la ligne d'eau, jitter de
- * 9u) est le cas réel qui déclenche ça — mesuré ~25% des tirages dans l'eau
- * avant ce garde-fou.
+ * Marge minimale (unités monde) qu'un emplacement de foule doit garder avec le
+ * **bord de l'eau** de la Seine. Le hotspot du Pont-au-Change est le cas réel
+ * qui déclenche le re-tirage — mesuré ~25 % des tirages dans l'eau avant ce
+ * garde-fou.
+ *
+ * Post-v2 : mesurée depuis le bord de l'eau (`isOverSeineWater`) et non depuis
+ * l'axe. L'ancienne valeur 7,5 = demi-largeur 7 + 0,5 de berge ; loin des îles
+ * le comportement est donc inchangé, et il suit désormais l'évasement du lit
+ * autour de la Cité et de Saint-Louis. La terre ferme des deux îles n'est jamais
+ * « dans l'eau » (voir `isOnPermanentIsland`) : la foule peut donc se presser sur
+ * le parvis de Notre-Dame, au milieu du fleuve, exactement comme il faut.
  */
-const CROWD_RIVER_CLEARANCE = 7.5;
+const CROWD_BANK_MARGIN = 0.5;
 /**
  * Bornes le nombre de re-tirages en cas de point tombé dans l'eau — garantit
  * la terminaison même dans un cas pathologique tout en restant déterministe
@@ -558,7 +605,7 @@ const CROWD_REDRAW_ATTEMPTS = 40;
 /**
  * Tire (x,z) via `drawFn(attempt)` (pur, dépend seulement de `attempt`) et
  * re-tire — graine avancée par `drawFn` lui-même — tant que le point tombe
- * dans le lit de la Seine (voir `CROWD_RIVER_CLEARANCE`). Générique : sert
+ * dans le lit de la Seine (voir `CROWD_BANK_MARGIN`). Générique : sert
  * aussi bien aux hotspots (disque) qu'au remplissage générique (anneau).
  * @param {(attempt:number) => {x:number,z:number}} drawFn
  * @returns {{x:number,z:number}}
@@ -567,7 +614,7 @@ function redrawUntilClearOfRiver(drawFn) {
   let pt = { x: 0, z: 0 };
   for (let attempt = 0; attempt < CROWD_REDRAW_ATTEMPTS; attempt++) {
     pt = drawFn(attempt);
-    if (distanceToSeine(pt.x, pt.z) >= CROWD_RIVER_CLEARANCE) break;
+    if (!isOverSeineWater(pt.x, pt.z, CROWD_BANK_MARGIN)) break;
   }
   return pt;
 }
@@ -577,7 +624,7 @@ function redrawUntilClearOfRiver(drawFn) {
  * grands sites), dispersion par hash. Pur — aucune dépendance three.js/DOM,
  * donc testable pour la déterminisme demandée par le brief. Chaque point est
  * re-tiré (graine avancée, jamais `Math.random`) tant qu'il tombe dans le lit
- * de la Seine — voir `redrawUntilClearOfRiver`/`CROWD_RIVER_CLEARANCE`.
+ * de la Seine — voir `redrawUntilClearOfRiver`/`CROWD_BANK_MARGIN`.
  * @param {number} count
  * @returns {Array<{x:number,z:number,order:number,uYear:number,yaw:number,bobPhase:number,shade:number}>}
  */

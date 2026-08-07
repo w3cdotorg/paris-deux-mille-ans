@@ -44,10 +44,9 @@
 import * as THREE from "three";
 import {
   urbanYear,
-  distanceToSeine,
+  isOverSeineWater,
   RINGS,
   LANDMARKS,
-  ISLANDS,
   insideMonumentFootprint,
   insideRailCorridor,
 } from "../geography.js";
@@ -95,7 +94,13 @@ const FACADE_LINE = 3.55;
 const EDGE_SPAN = 0.92; // fraction de l'arête utilisable (évite les angles pile)
 const PARTY_WALL_SEAM = 0.04; // interstice entre deux bâtiments contigus (mur mitoyen)
 
-const WATER_MARGIN = 9; // pas de bâti à moins de 9 unités de l'axe de la Seine
+// Marge de berge du bâti, mesurée depuis le **bord de l'eau** et non depuis
+// l'axe du fleuve (post-v2). L'ancienne constante valait 9, mesurée depuis
+// l'axe, pour un lit de demi-largeur 7 : 2 unités de berge. Le lit s'élargit
+// désormais à 12 autour des îles (`SEINE_ISLAND_HALF_WIDTH`), et une constante
+// absolue y aurait laissé des maisons dans l'eau. Loin des îles,
+// `isOverSeineWater(x, z, 2)` est exactement l'ancien test `distanceToSeine < 9`.
+const WATER_BANK_MARGIN = 2;
 const SINK = 0.12; // enfoncement dans le sol, masque l'erreur d'échantillonnage
 
 // Densité : maximale au coeur, décroissante vers les faubourgs.
@@ -486,33 +491,15 @@ export function cellBuildingCount(ix, iz, density) {
 }
 
 /**
- * Île de la Cité / Saint-Louis : terrain sec en permanence (voir
- * `constantIslandDelta` dans terrain.js, qui les surélève indépendamment du
- * relief de base), pas une berge boueuse — `WATER_MARGIN` ci-dessous, pensé
- * pour tenir le bâti à distance de l'eau *courante*, exclurait sinon la
- * totalité de ces îles (elles sont, par nature, à moins de 9 unités de l'axe
- * du fleuve de tous les côtés). Louviers (île « morte » en 1843, voir
- * ISLANDS) volontairement exclue de cette exemption : son bras mort et sa
- * disparition programmée en font un cas à part, pas un simple confort de
- * berge.
- */
-function onPermanentIsland(x, z) {
-  return (
-    insideEllipse(x, z, ISLANDS.cite.x, ISLANDS.cite.z, ISLANDS.cite.rx, ISLANDS.cite.rz) ||
-    insideEllipse(
-      x,
-      z,
-      ISLANDS.saintLouis.x,
-      ISLANDS.saintLouis.z,
-      ISLANDS.saintLouis.rx,
-      ISLANDS.saintLouis.rz
-    )
-  );
-}
-
-/**
  * Cellule constructible ? Exclut l'eau, les grands espaces ouverts, les
  * dégagements de monuments, et tout ce qui n'est pas encore urbanisé.
+ *
+ * L'exemption des deux îles permanentes (Cité, Saint-Louis) vit désormais dans
+ * `isOverSeineWater` (geography.js) : elles sont, par nature, entièrement à
+ * l'intérieur du lit du fleuve, et sans exemption la marge de berge les
+ * viderait de tout bâti — donc, entre autres, des huttes gauloises de -250,
+ * les premières constructions de toute la frise. Louviers en reste exclue
+ * (bras mort, disparition en 1843) : un cas à part, pas un confort de berge.
  * @param {number} x - centre de cellule
  * @param {number} z
  * @param {number} uYear - urbanYear(x, z)
@@ -521,7 +508,7 @@ function onPermanentIsland(x, z) {
  */
 export function isBuildableCell(x, z, uYear, year) {
   if (!(uYear <= year)) return false; // couvre aussi uYear === Infinity
-  if (distanceToSeine(x, z) < WATER_MARGIN && !onPermanentIsland(x, z)) return false;
+  if (isOverSeineWater(x, z, WATER_BANK_MARGIN)) return false;
   for (const space of OPEN_SPACES) {
     if (insideEllipse(x, z, space.x, space.z, space.rx, space.rz)) return false;
   }
