@@ -452,6 +452,41 @@ export const MONUMENTS = [
       },
     ],
   },
+  // ==========================================================================
+  // Tâche 15 — une survivante : l'église a disparu, sa tour est restée
+  // ==========================================================================
+  {
+    id: "tourSaintJacques",
+    label: "La tour Saint-Jacques",
+    phrase:
+      "Une petite église avec sa tour de pierre, près du pont au Change. L'église a disparu à la Révolution, mais sa tour, elle, est restée là, toute seule.",
+    x: L.tourSaintJacques.x,
+    z: L.tourSaintJacques.z,
+    states: [
+      {
+        id: "eglise",
+        slot: "eglise",
+        model: "egliseSaintJacques",
+        born: 1300,
+        buildYears: 30,
+        died: 1793,
+        razeYears: 4,
+        label: "L'église Saint-Jacques-de-la-Boucherie",
+        phrase: "Une petite église de quartier, tout près des bouchers du marché, avec sa tour de pierre à l'entrée.",
+      },
+      {
+        id: "tour",
+        slot: "tour",
+        model: "tourSaintJacques",
+        born: 1509,
+        buildYears: 14,
+        // Pas de `died` : depuis 1523, la tour est toujours là.
+        label: "La tour Saint-Jacques",
+        phrase:
+          "L'église a été démontée à la Révolution... mais sa belle tour est restée toute seule, comme une géante oubliée !",
+      },
+    ],
+  },
 ];
 
 // ============================================================================

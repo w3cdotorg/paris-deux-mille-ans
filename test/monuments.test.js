@@ -10,6 +10,7 @@ import {
   forceRescan,
   update as updateMonuments,
   debugCounts,
+  visibleGroups,
 } from "../src/layers/monuments.js";
 import {
   MODEL_BUILDERS,
@@ -41,7 +42,8 @@ test("registre : chaque site a un id unique, des coordonnées finies, un label e
     assert.ok(typeof m.phrase === "string" && m.phrase.length > 10, `${m.id} : phrase manquante`);
     assert.ok(Array.isArray(m.states) && m.states.length >= 1, `${m.id} : aucun état`);
   }
-  // Les 9 sites de la tâche 10 + les 5 de la tâche 11.
+  // Les 9 sites de la tâche 10 + les 5 de la tâche 11 + la tour Saint-Jacques
+  // de la tâche 15.
   assert.deepEqual(
     [...ids].sort(),
     [
@@ -59,6 +61,7 @@ test("registre : chaque site a un id unique, des coordonnées finies, un label e
       "thermes",
       "tourEiffel",
       "tourMontparnasse",
+      "tourSaintJacques",
     ]
   );
 });
@@ -783,6 +786,84 @@ test("Sacré-Cœur : chantier de 1875 à 1914, campanile en dernier", () => {
   for (const c of campanile) {
     assert.ok(c.userData.stage[0] >= 0.8, `pièce du campanile trop précoce : ${c.userData.stage}`);
   }
+});
+
+// ============================================================================
+// TOUR SAINT-JACQUES — une survivante : l'église a disparu, la tour est restée
+// ============================================================================
+
+test("Tour Saint-Jacques : en 1400 seule l'église est là, pas encore de tour", () => {
+  const at = (y) =>
+    monumentStatesAt(y)
+      .filter((s) => s.monument === "tourSaintJacques")
+      .map((s) => s.state)
+      .sort();
+  assert.deepEqual(at(1400), ["eglise"]);
+});
+
+test("Tour Saint-Jacques : en 1600, l'église et sa tour coexistent", () => {
+  const at = (y) =>
+    monumentStatesAt(y)
+      .filter((s) => s.monument === "tourSaintJacques")
+      .map((s) => s.state)
+      .sort();
+  assert.deepEqual(at(1600), ["eglise", "tour"]);
+  assert.equal(monumentStateAt(1600, "tourSaintJacques", "eglise").presence, 1);
+  assert.equal(monumentStateAt(1600, "tourSaintJacques", "tour").presence, 1);
+});
+
+test("Tour Saint-Jacques : en 1795, l'église est en pleine démolition mais la tour, elle, est intacte", () => {
+  const eglise = monumentStateAt(1795, "tourSaintJacques", "eglise");
+  const tour = monumentStateAt(1795, "tourSaintJacques", "tour");
+  assert.equal(eglise.phase, "razing");
+  assert.ok(eglise.presence > 0 && eglise.presence < 1, `présence de l'église attendue dans (0,1), obtenue ${eglise.presence}`);
+  assert.equal(tour.phase, "alive");
+  assert.equal(tour.presence, 1);
+});
+
+test("Tour Saint-Jacques : en 2026, l'église a disparu, la tour se dresse seule", () => {
+  const present = monumentStatesAt(2026)
+    .filter((s) => s.monument === "tourSaintJacques")
+    .map((s) => s.state);
+  assert.deepEqual(present, ["tour"]);
+  assert.equal(monumentStateAt(2026, "tourSaintJacques", "eglise").presence, 0);
+  assert.equal(monumentStateAt(2026, "tourSaintJacques", "tour").phase, "alive");
+});
+
+test("Tour Saint-Jacques : la tour ne meurt jamais après 1523", () => {
+  for (const year of [1523.5, 1700, 1793, 1900, 2026]) {
+    const { phase } = monumentStateAt(year, "tourSaintJacques", "tour");
+    assert.ok(phase === "building" || phase === "alive", `en ${year}, phase = ${phase}`);
+  }
+});
+
+test("Tour Saint-Jacques : silhouette élancée, ~5,2-5,8 unités (52 m), nettement sous les tours de Notre-Dame", () => {
+  const g = MODEL_BUILDERS.tourSaintJacques();
+  let top = 0;
+  for (const c of g.children) top = Math.max(top, c.userData.y0 + c.userData.h);
+  assert.ok(top >= 5.2 && top <= 5.8, `sommet de la tour Saint-Jacques à ${top}`);
+
+  const cathedrale = MODEL_BUILDERS.cathedraleGothique();
+  let towerTop = 0;
+  for (const c of cathedrale.children) {
+    if (c.isGroup) continue;
+    towerTop = Math.max(towerTop, c.userData.y0 + c.userData.h);
+  }
+  assert.ok(top < towerTop, "un clocher de paroisse ne doit pas dominer les tours de Notre-Dame");
+});
+
+test("Tour Saint-Jacques : cliquable — visible et identifiée par userData.monumentId/stateId en 2026", () => {
+  const scene = new THREE.Group();
+  initMonuments({ scene });
+  forceRescan(2026);
+
+  const groups = visibleGroups();
+  const tower = groups.find((g) => g.userData.monumentId === "tourSaintJacques" && g.userData.stateId === "tour");
+  assert.ok(tower, "le groupe de la tour doit être visible et identifié en 2026 (cible du raycast)");
+  assert.equal(tower.visible, true);
+
+  const church = groups.find((g) => g.userData.monumentId === "tourSaintJacques" && g.userData.stateId === "eglise");
+  assert.equal(church, undefined, "l'église, disparue depuis 1797, ne doit pas être cliquable en 2026");
 });
 
 test("Opéra et Montparnasse : aux bonnes années, et Montparnasse fait bien 21 unités", () => {
