@@ -38,7 +38,8 @@ function clamp(v, min, max) {
   return v < min ? min : v > max ? max : v;
 }
 
-function formatYear(year) {
+/** Exportée : narration.js (tâche 15) l'utilise pour l'année géante de la carte-récit. */
+export function formatYear(year) {
   const y = Math.round(year);
   return y < 0 ? `${Math.abs(y)} av. J.-C.` : `${y}`;
 }
@@ -172,6 +173,14 @@ function buildDOM() {
     bus.dispatchEvent(new CustomEvent("weatherchange", { detail: { weather: next } }));
   });
 
+  // Tâche 15 : fait pulser 3 s tous les monuments cliquables présents à
+  // l'année courante — narration.js écoute cet événement et fait tout le
+  // travail (il connaît la scène, ui.js ne la voit jamais).
+  const zonesBtn = createIconButton("✨", "Montrer les zones");
+  zonesBtn.addEventListener("click", () => {
+    bus.dispatchEvent(new CustomEvent("showzones"));
+  });
+
   const qualityWrap = document.createElement("div");
   qualityWrap.className = "pdma-btn-wrap";
   const qualityBtn = createIconButton("⚙️", "Qualité graphique");
@@ -187,6 +196,7 @@ function buildDOM() {
   buttonsRow.appendChild(soundBtn);
   buttonsRow.appendChild(landmarksBtn);
   buttonsRow.appendChild(weatherBtn);
+  buttonsRow.appendChild(zonesBtn);
   buttonsRow.appendChild(qualityWrap);
   root.appendChild(buttonsRow);
 

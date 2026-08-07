@@ -10,6 +10,7 @@ import * as life from "./layers/life.js";
 import * as ghosts from "./layers/ghosts.js";
 import { createControls } from "./controls.js";
 import * as ui from "./ui.js";
+import * as narration from "./narration.js";
 
 const canvas = document.querySelector("#scene");
 
@@ -80,6 +81,12 @@ const controls = createControls(camera, canvas, () => state);
 // UI shell (frise, boutons ronds, story-card slot) — follows the same
 // init/update contract as the scene layers above, but drives the DOM.
 ui.init(state);
+
+// Narration (Task 15) — cartes-récits, voix, monuments cliquables, compteur.
+// Not part of the `layers` array above: unlike the scene layers, it needs the
+// DOM (canvas for tap/raycast, #pdma-ui for the card/counter/label) and the
+// ui.js bus, not just `ctx`/`state`.
+narration.init({ scene, camera, canvas }, state);
 
 // ui.js never mutates `state` directly; it only emits bus events. This is
 // the one place that translates them into state mutations (or, for
@@ -175,6 +182,7 @@ function setYear(year) {
   // prochaine frame de la boucle animate().
   ghosts.update(0, state);
   ui.update(0, state);
+  narration.update(0, state);
   renderer.render(scene, camera);
 }
 
@@ -216,6 +224,11 @@ window.__paris = {
   weatherStats: () => weather.stats(),
   renderer,
   scene,
+  // Tâche 15 — carte-récit, voix, monuments cliquables, compteur.
+  narration: {
+    state: () => narration.debugState(),
+    voices: () => narration.debugVoices(),
+  },
 };
 
 // --- Main loop --------------------------------------------------------------
@@ -232,6 +245,7 @@ function animate() {
   }
   controls.update(dt);
   ui.update(dt, state);
+  narration.update(dt, state);
 
   renderer.render(scene, camera);
 

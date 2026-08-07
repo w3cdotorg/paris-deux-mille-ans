@@ -729,6 +729,14 @@ export function init(ctx) {
       group.position.set(m.x, baseY, m.z);
       if (m.rotY) group.rotation.y = m.rotY;
       group.visible = false;
+      // Identifie le site/état porté par ce groupe — c'est ce que la tâche 15
+      // lit en remontant `intersection.object.parent` après un raycast, pour
+      // retrouver le `label`/`phrase` cliquable sans dépendre du nom du modèle
+      // (qui, lui, identifie le *modèle*, pas le site — voir `monument_${id}`
+      // dans monumentModels.js, partagé par ex. entre aucune paire de sites
+      // mais dont le nom ne porte pas `m.id`).
+      group.userData.monumentId = m.id;
+      group.userData.stateId = st.id;
       ctx.scene.add(group);
 
       // Profondeur d'enfouissement = hauteur de la pièce la plus haute, pour
@@ -852,6 +860,25 @@ export function debugCounts(year) {
       visible: entry.group.visible,
       visibleParts,
     };
+  }
+  return out;
+}
+
+/**
+ * Groupes actuellement *visibles* — la cible du raycast au clic (tâche 15).
+ * three.js ne filtre pas lui-même sur `.visible` pendant un raycast (seul
+ * `object.layers` compte), donc sans ce filtre un clic sur, disons, l'Île de
+ * la Cité en l'an 100 pourrait accrocher la géométrie (masquée mais bien
+ * présente dans la scène) de la Tour Eiffel, née 1787 ans plus tard. Ne
+ * renvoie que les groupes de premier niveau — chacun porte déjà
+ * `userData.monumentId`/`stateId` (voir `init`), lus par
+ * `narration.resolveMonumentHit` après remontée des ancêtres du hit.
+ * @returns {THREE.Group[]}
+ */
+export function visibleGroups() {
+  const out = [];
+  for (const entry of entries) {
+    if (entry.group.visible) out.push(entry.group);
   }
   return out;
 }
