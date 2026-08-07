@@ -221,8 +221,19 @@ const COLORS = {
   smoke: 0xd8d4cc,
   bush: 0x4d7b3f,
   bushLight: 0x6b9450,
-  asphalt: 0x5a5c60,
-  asphaltEdge: 0x8d8f93,
+  // Correctif "on ne voit pas le périph" (post-v1 A) : l'ancien 0x5a5c60,
+  // rendu sous l'éclairage de crépuscule (voir weather.js), tombait à peu
+  // près à la même luminance que les toits alentour — un ruban gris parmi
+  // des toits gris n'est pas un ruban. Un bitume nettement plus sombre reste
+  // lisible quel que soit le moment de la frise (plein jour ou crépuscule),
+  // parce qu'il n'a alors plus besoin de rivaliser d'exposition avec le sol :
+  // il est simplement plus bas que tout le reste.
+  asphalt: 0x2c2d31,
+  // La glissière/bande de rive est posée en matériau non éclairé (Basic,
+  // voir buildPeripherique) — comme une glissière réfléchissante réelle, sa
+  // clarté ne dépend donc pas de l'heure de la frise : c'est elle qui trace
+  // l'anneau à l'oeil, même de nuit ou sous un ciel couvert.
+  asphaltEdge: 0xcdd0c8,
   median: 0x9aa08f, // terre-plein central (bordure béton + un peu de vert)
   metroGreen: 0x2f6b4a,
   metroBlue: 0x2b4f88,
@@ -231,8 +242,14 @@ const COLORS = {
   headlight: 0xfff3cf,
 };
 
-/** Les 8 teintes de la circulation (bicolores : caisse claire ou sombre). */
-const CAR_COLORS = [0xc9cbcd, 0x8f9296, 0x3d4148, 0xb04434, 0x2f5f8a, 0xd8d3c4, 0x5c6b52, 0xe0b23f];
+/**
+ * Les 8 teintes de la circulation. Recentrées (post-v1 A) sur des tons
+ * clairs/saturés plutôt que des gris moyens : avec le matériau Basic ci-dessus
+ * la teinte se voit désormais pleine à l'écran, donc un gris moyen comme
+ * l'ancien 0x8f9296 se serait retrouvé aussi clair que le bitume — un comble
+ * pour une "pastille" censée s'en détacher.
+ */
+const CAR_COLORS = [0xd9dbd5, 0xece8dc, 0x2f3136, 0xc23f2c, 0x3568a8, 0xe4dcc8, 0x4f7a45, 0xe6b93a];
 
 // ============================================================================
 // Géométrie pure — points, tangentes, plans (testable sans WebGL)
@@ -774,10 +791,12 @@ function buildPeripherique(ctx) {
     nSeg * 2,
     "peri_deck"
   );
+  // Basic (non éclairé) et non Lambert : c'est le choix qui rend la bande
+  // de rive lisible en toute circonstance — voir la note de COLORS.asphaltEdge.
   peri.edges = instanced(
     ctx,
     box,
-    new THREE.MeshLambertMaterial({ color: COLORS.asphaltEdge }),
+    new THREE.MeshBasicMaterial({ color: COLORS.asphaltEdge }),
     nSeg * 2,
     "peri_edges"
   );
@@ -791,7 +810,15 @@ function buildPeripherique(ctx) {
     "peri_median"
   );
 
-  peri.cars = instanced(ctx, box, new THREE.MeshLambertMaterial({ color: 0xffffff }), CAR_COUNT, "peri_cars");
+  // Basic, pas Lambert : à cette échelle (une voiture couvre à peine un
+  // pixel depuis la vue d'ensemble), une caisse ombrée s'assombrit au point
+  // de se fondre dans le bitume — l'anti-aliasing moyenne alors sa couleur
+  // avec ses voisins avant même que la lumière n'entre en jeu. Un matériau
+  // non éclairé restitue sa teinte pleine quel que soit l'éclairage de la
+  // frise, ce qui est *la* condition pour qu'elle se voie comme une pastille
+  // mobile — voir aussi CAR_COLORS (post-v1 A), recentré sur des teintes
+  // saturées plutôt que des gris qui se seraient fondus dans le bitume.
+  peri.cars = instanced(ctx, box, new THREE.MeshBasicMaterial({ color: 0xffffff }), CAR_COUNT, "peri_cars");
   const colors = new Float32Array(CAR_COUNT * 3);
   const c = new THREE.Color();
   for (let i = 0; i < CAR_COUNT; i++) {
@@ -859,19 +886,26 @@ function applyPeripherique(year) {
               )
         );
       }
+      // Glissière élargie (post-v1 A, 0.12→0.2 de large et 0.22→0.28 de haut) :
+      // en matériau Basic, c'est elle qui doit porter à elle seule la lecture
+      // de l'anneau depuis la vue d'ensemble — une bande trop fine y disparaît
+      // dans l'anti-aliasing avant même d'atteindre l'écran. Le décalage
+      // vertical (0.14 = moitié de la nouvelle hauteur) garde sa face
+      // inférieure exactement au niveau du dessus de la chaussée, sans écart
+      // ni recouvrement.
       peri.edges.setMatrixAt(
         idx,
         p < 0.85
           ? _zero
           : composeAligned(
               seg.midX + nx * edgeOff,
-              groundY + cfg.deckH + 0.11,
+              groundY + cfg.deckH + 0.14,
               seg.midZ + nz * edgeOff,
               seg.angle,
               0,
               Math.max(seg.length, 0.05),
-              0.22,
-              0.12
+              0.28,
+              0.2
             )
       );
     }
@@ -932,19 +966,26 @@ function updateCars(state, presence) {
     const x = p.x + nx * off;
     const z = p.z + nz * off;
     const groundY = groundHeightAt(x, z) + PERIPHERIQUE.deckH;
-    peri.cars.setMatrixAt(i, composeAligned(x, groundY + 0.16, z, yaw, 0, 0.42, 0.3, 0.24));
+    // Caisse légèrement agrandie (post-v1 A, 0.42→0.55 de long) : à la distance
+    // de la vue d'ensemble une voiture à l'échelle stricte couvre bien moins
+    // d'un pixel, donc l'anti-aliasing la moyenne avec le bitume avant qu'elle
+    // n'atteigne l'écran — elle ne "se voit" jamais, quelle que soit sa
+    // couleur. Rester un peu au-dessus de l'échelle réelle (comme CAR_COUNT
+    // et TRAIN_COUNT l'assument déjà pour la même raison, voir leurs notes)
+    // est ici la condition pour qu'un flux existe visuellement.
+    peri.cars.setMatrixAt(i, composeAligned(x, groundY + 0.17, z, yaw, 0, 0.55, 0.34, 0.3));
     if (night) {
       peri.headlights.setMatrixAt(
         i,
         composeAligned(
-          x + Math.cos(yaw) * 0.25,
-          groundY + 0.15,
-          z - Math.sin(yaw) * 0.25,
+          x + Math.cos(yaw) * 0.3,
+          groundY + 0.16,
+          z - Math.sin(yaw) * 0.3,
           yaw,
           0,
-          0.14,
-          0.13,
-          0.3
+          0.16,
+          0.15,
+          0.32
         )
       );
     }
