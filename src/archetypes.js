@@ -66,11 +66,10 @@ const PAL = {
   hStoneCool: c(0xdcd3bd),
   zinc: c(0x8d9298),
   zincDark: c(0x787e85),
-  iron: c(0x3b4048),
   // Balcon filant — gris moyen plutôt que le fer quasi noir d'origine : à
-  // ×2-3 bandeaux pleine largeur par archétype, l'iron 0x3b4048 peinturait
-  // des zébrures sombres sur toute la façade (review Important 4). Un gris
-  // moyen reste lisible comme ferronnerie sans écraser la pierre claire.
+  // ×2-3 bandeaux pleine largeur par archétype, un fer quasi noir (0x3b4048)
+  // peinturait des zébrures sombres sur toute la façade (review Important 4).
+  // Un gris moyen reste lisible comme ferronnerie sans écraser la pierre claire.
   balconyIron: c(0x6b6f75),
   chimney: c(0x9c6a53),
   // moderne
@@ -299,7 +298,7 @@ export const FAMILY_ORDER = ["gaulois", "romain", "medieval", "classique", "haus
 
 /**
  * Bandeau de balcon filant : fine boîte débordant légèrement de la façade.
- * Gris moyen, fin et peu débordant (review Important 4 : l'ancien iron quasi
+ * Gris moyen, fin et peu débordant (review Important 4 : l'ancien fer quasi
  * noir + débord 0.07 + épaisseur 0.09, répété ×2-3 par archétype, peignait
  * des zébrures sombres pleine largeur plutôt qu'une ferronnerie discrète).
  */

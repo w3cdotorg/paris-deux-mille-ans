@@ -96,6 +96,48 @@ const UP_HOLD_SECONDS = 30;
 const CHANGE_COOLDOWN = AUTO_WINDOW;
 
 /**
+ * Capacité du ring buffer des échantillons de frame — bien au-dessus de ce
+ * qu'une fenêtre de AUTO_WINDOW (4 s) peut jamais accumuler à des cadences
+ * réalistes (≈250 échantillons à 60 Hz, ≈570 à 144 Hz) ou dans les tests
+ * synthétiques (dt ≥ 0.1). `ringPush` double la capacité plutôt que
+ * d'écraser un échantillon encore dans la fenêtre si jamais elle était
+ * dépassée, pour préserver exactement la sémantique de la fenêtre glissante.
+ */
+const AUTO_CAPACITY = 2048;
+
+function createRing(capacity) {
+  return { t: new Float64Array(capacity), ms: new Float64Array(capacity), head: 0, count: 0, capacity };
+}
+
+function growRing(ring) {
+  const capacity = ring.capacity * 2;
+  const t = new Float64Array(capacity);
+  const ms = new Float64Array(capacity);
+  for (let i = 0; i < ring.count; i++) {
+    const idx = (ring.head + i) % ring.capacity;
+    t[i] = ring.t[idx];
+    ms[i] = ring.ms[idx];
+  }
+  ring.t = t;
+  ring.ms = ms;
+  ring.head = 0;
+  ring.capacity = capacity;
+}
+
+function ringPush(ring, t, ms) {
+  if (ring.count === ring.capacity) growRing(ring);
+  const tail = (ring.head + ring.count) % ring.capacity;
+  ring.t[tail] = t;
+  ring.ms[tail] = ms;
+  ring.count++;
+}
+
+function ringShiftOldest(ring) {
+  ring.head = (ring.head + 1) % ring.capacity;
+  ring.count--;
+}
+
+/**
  * État pur de la machine auto — aucune dépendance three/DOM, testable en
  * Node avec des `dt`/`frameMs` synthétiques (voir quality.test.js).
  * @param {string} [startTier]
@@ -103,7 +145,10 @@ const CHANGE_COOLDOWN = AUTO_WINDOW;
 export function createAutoState(startTier = "haut") {
   return {
     tier: startTier,
-    samples: [], // {t, ms} — fenêtre glissante de AUTO_WINDOW secondes, triée par t croissant
+    // Ring buffer préalloué (pas de `{t, ms}` par frame) : fenêtre glissante
+    // de AUTO_WINDOW secondes, triée par t croissant du plus vieux (head) au
+    // plus récent.
+    ring: createRing(AUTO_CAPACITY),
     clock: 0, // secondes écoulées depuis createAutoState (ou le dernier enableAuto)
     goodSince: null, // instant (sur `clock`) depuis lequel la moyenne est restée < UP_THRESHOLD_MS sans interruption
     lastChangeAt: -Infinity,
@@ -122,13 +167,16 @@ export function createAutoState(startTier = "haut") {
  */
 export function feedFrameTime(auto, dt, frameMs) {
   auto.clock += Math.max(0, dt);
-  auto.samples.push({ t: auto.clock, ms: frameMs });
-  while (auto.samples.length > 1 && auto.clock - auto.samples[0].t > AUTO_WINDOW) {
-    auto.samples.shift();
+  const ring = auto.ring;
+  ringPush(ring, auto.clock, frameMs);
+  while (ring.count > 1 && auto.clock - ring.t[ring.head] > AUTO_WINDOW) {
+    ringShiftOldest(ring);
   }
   let sum = 0;
-  for (const s of auto.samples) sum += s.ms;
-  const mean = sum / auto.samples.length;
+  for (let i = 0; i < ring.count; i++) {
+    sum += ring.ms[(ring.head + i) % ring.capacity];
+  }
+  const mean = sum / ring.count;
   const sinceChange = auto.clock - auto.lastChangeAt;
   // La fenêtre n'est "pleine" (donc la moyenne réellement représentative des
   // AUTO_WINDOW dernières secondes, pas d'un unique échantillon de départ)
@@ -211,7 +259,8 @@ export function createController(ctx, consumers = {}, startTier = "haut") {
     enableAuto() {
       mode = "auto";
       auto.tier = effectiveTier;
-      auto.samples = [];
+      auto.ring.head = 0;
+      auto.ring.count = 0;
       auto.clock = 0;
       auto.goodSince = null;
       auto.lastChangeAt = -Infinity;

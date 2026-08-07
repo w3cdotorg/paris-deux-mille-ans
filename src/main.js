@@ -241,6 +241,15 @@ ui.bus.addEventListener("qualitychange", (event) => {
   }
 });
 
+// state.reducedMotion ne doit pas rester figé sur la valeur lue au chargement :
+// un visiteur peut activer/désactiver "Réduire les animations" dans son OS
+// pendant la visite (narration.js sync l'instant pdma, les impulsions/anneaux
+// réagissent déjà au flag live — seule la lecture initiale manquait le live).
+const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+reducedMotionQuery.addEventListener("change", (event) => {
+  state.reducedMotion = event.matches;
+});
+
 function onResize() {
   const width = window.innerWidth;
   const height = window.innerHeight;

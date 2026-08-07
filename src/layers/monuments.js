@@ -47,7 +47,7 @@
 
 import * as THREE from "three";
 import { LANDMARKS, MONUMENT_FOOTPRINTS } from "../geography.js";
-import { lifecycle, easeOutBack } from "../timeEngine.js";
+import { lifecycle, easeOutBack, presenceAtDeath } from "../timeEngine.js";
 import { groundHeightAt } from "./terrain.js";
 import { MODEL_BUILDERS } from "../monumentModels.js";
 
@@ -748,10 +748,12 @@ export function init(ctx) {
       }
       // Présence atteinte au moment de la mort (1 pour tous les monuments
       // actuels, qui meurent tous après achèvement — mais le calcul reste
-      // juste si un état est un jour tué en cours de chantier).
+      // juste si un état est un jour tué en cours de chantier). Même formule
+      // que la branche "razing" de `lifecycle()` (timeEngine.js) — partagée
+      // via `presenceAtDeath` pour ne jamais la réimplémenter à côté et
+      // risquer une dérive entre les deux.
       const buildYears = st.buildYears ?? 10;
-      const deathPresence =
-        st.died === undefined ? 1 : clamp01((st.died - st.born) / (buildYears || 1));
+      const deathPresence = st.died === undefined ? 1 : presenceAtDeath(st.born, buildYears, st.died);
 
       const entry = {
         monument: m,

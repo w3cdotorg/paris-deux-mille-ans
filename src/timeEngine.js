@@ -53,6 +53,23 @@ export function easeOutBack(t, overshoot = 1.2) {
 }
 
 /**
+ * Presence an object had reached at the moment it died — 1 if it had
+ * already finished building by then, otherwise the interrupted build
+ * progress. Shared by `lifecycle()`'s "razing" branch below and by any
+ * caller that needs this single value without an evaluation year (e.g.
+ * monuments.js calibrating burial depth) — extracted so both sides read
+ * from one formula instead of two copies drifting apart.
+ * @param {number} born
+ * @param {number} buildYears
+ * @param {number} died
+ * @returns {number} 0..1
+ */
+export function presenceAtDeath(born, buildYears, died) {
+  const buildProgress = (died - born) / buildYears;
+  return Math.max(0, Math.min(buildProgress, 1));
+}
+
+/**
  * Determine the lifecycle phase and presence of an object.
  * An object can be absent, building (presence 0→1), alive, razing (presence 1→0), or gone.
  * @param {number} year - The year to evaluate
@@ -79,9 +96,7 @@ export function lifecycle(
     if (year < razeEnd) {
       // Razing phase: presence was up to 1, now decreases to 0
       // If death occurred during build, presence at death = progress at that time
-      const buildProgress = (died - born) / buildYears;
-      const presenceAtDeath = Math.max(0, Math.min(buildProgress, 1));
-      const presence = presenceAtDeath * (1 - (year - died) / razeYears);
+      const presence = presenceAtDeath(born, buildYears, died) * (1 - (year - died) / razeYears);
       return { phase: "razing", presence };
     } else {
       // Gone phase: no longer present

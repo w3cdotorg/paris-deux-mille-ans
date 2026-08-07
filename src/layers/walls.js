@@ -1014,7 +1014,10 @@ export function update(dt, state) {
  * @param {number} year
  */
 export function forceRescan(year) {
-  rescanAll(year, performance.now() / 1000);
+  // Ne pas dater avec performance.now() : le cooldown de poussière (writeSegment)
+  // compare state.time, une horloge différente (narrative, pas wall-clock).
+  // -Infinity laisse le prochain cooldown se redébouncer naturellement.
+  rescanAll(year, -Infinity);
   lastAppliedYear = year;
 }
 

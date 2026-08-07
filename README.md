@@ -14,8 +14,10 @@ Fait avec amour (et Three.js) pour Raphaël.
 puis ouvrir **http://localhost:8123/** dans un navigateur (Chrome, Firefox, Safari…).
 
 Une fois publié sur GitHub Pages, il suffit d'ouvrir l'adresse de la page — aucune
-installation, aucun compte, aucun réseau nécessaire à part pour charger la page une
-première fois (tout est ensuite embarqué, y compris Three.js).
+installation, aucun compte. Fonctionne même sans réseau : seules les jolies polices
+(Fredoka, Baloo 2) viennent d'internet (Google Fonts, à chaque chargement), et Paris
+s'affiche très bien sans elles, avec les polices système en repli. Three.js, lui, est
+bien embarqué (`vendor/`).
 
 Le seul cas où `npm` sert, c'est pour faire tourner les tests automatiques
 (`npm test`) — jamais pour jouer avec Paris.

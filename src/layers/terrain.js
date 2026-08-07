@@ -727,7 +727,10 @@ function maybeRescan(state) {
 export function forceRescan(year) {
   const rounded = Math.round(year);
   lastScanYear = rounded;
-  lastScanTime = performance.now() / 1000;
+  // Ne pas dater avec performance.now() : maybeRescan() compare state.time,
+  // une horloge différente (narrative, pas wall-clock). -Infinity laisse le
+  // prochain rescan throttlé se redébouncer naturellement.
+  lastScanTime = -Infinity;
   rescanAll(rounded);
 }
 
