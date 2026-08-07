@@ -13,6 +13,8 @@ import {
   HARD_CAP,
   PC_NEAR,
   PC_FAR,
+  setVolume,
+  getVolume,
 } from "../src/audio.js";
 import { MOMENTS } from "../src/timeline.js";
 
@@ -142,6 +144,33 @@ test("populationToGain : monotone croissante en population", () => {
   for (let i = 1; i < gains.length; i++) {
     assert.ok(gains[i] >= gains[i - 1], `gain(${pops[i]})=${gains[i]} devrait être ≥ gain(${pops[i - 1]})=${gains[i - 1]}`);
   }
+});
+
+// ============================================================================
+// setVolume / getVolume — curseur de volume 🔈 (post-v1)
+// ============================================================================
+// Sans DOM/AudioContext (Node), setVolume ne peut pas toucher le graphe Web
+// Audio (audioCtx reste null) — mais elle doit malgré tout mémoriser la
+// cible demandée, exactement ce que getVolume() doit renvoyer ensuite.
+
+test("setVolume(50) : getVolume() renvoie 0.5, la valeur par défaut (curseur à 50%)", () => {
+  setVolume(50);
+  assert.equal(getVolume(), 0.5);
+});
+
+test("setVolume(20) : getVolume() renvoie 0.2 (mapping linéaire, voir volumePercentToGain)", () => {
+  setVolume(20);
+  assert.equal(getVolume(), 0.2);
+});
+
+test("setVolume(0) : getVolume() renvoie 0 (curseur au minimum, silence)", () => {
+  setVolume(0);
+  assert.equal(getVolume(), 0);
+});
+
+test("setVolume(100) : getVolume() renvoie 1", () => {
+  setVolume(100);
+  assert.equal(getVolume(), 1);
 });
 
 test("populationToGain : toujours dans [0,1], jamais négatif même pour une population négative", () => {

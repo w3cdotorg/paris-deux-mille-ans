@@ -51,17 +51,19 @@
 
 import { bus } from "./ui.js";
 import { MOMENTS } from "./timeline.js";
-import { momentBlend, lerp, smoothstep } from "./timeEngine.js";
+import { momentBlend, lerp, smoothstep, volumePercentToGain } from "./timeEngine.js";
 import { RINGS, distanceToRing } from "./geography.js";
 
 // ============================================================================
 // Réglages du mix — "doux, jamais agressif" (oreilles d'enfant)
 // ============================================================================
 
-/** Gain maître visé quand 🔈 est activé (jamais plus fort que ça). */
+/** Gain maître visé quand 🔈 est activé, par défaut (curseur de volume à 50 %, voir volumeTarget ci-dessous et le popover 🔈 de ui.js). */
 export const MASTER_TARGET = 0.5;
 /** Durée du fondu maître (activation/coupure), en secondes. */
 const MASTER_FADE = 0.8;
+/** Constante de temps de l'ajustement LIVE du curseur de volume (setTargetAtTime) — plus rapide que le fondu ON/OFF (MASTER_FADE) : on veut que le curseur réagisse au glissement du doigt, pas qu'il fonde lentement. */
+const VOLUME_TIME_CONSTANT = 0.15;
 
 /** Plafond dur, appliqué après tout multiplicateur (proximité, boost…) — aucune nappe ne peut le dépasser, même boostée. */
 export const HARD_CAP = 0.35;
@@ -276,6 +278,16 @@ let suspendTimer = null;
 let tickAccum = 0;
 let shouldAutoStartOnGesture = false;
 let gestureListenerAttached = false;
+
+/**
+ * Post-v1 — curseur de volume du popover 🔈 : cible du fondu maître, pilotée
+ * en direct par `setVolume()`. Démarre à `MASTER_TARGET` (le comportement
+ * d'avant la tâche) ; `state.soundVolume` (main.js) en est la source de
+ * vérité côté UI, ce module ne fait que l'appliquer au graphe Web Audio.
+ */
+let volumeTarget = MASTER_TARGET;
+/** true entre un fadeIn() et le fadeOut() suivant — un ajustement du curseur pendant que le son est explicitement coupé ne doit modifier QUE la cible pour le prochain fadeIn(), jamais le graphe en direct (sinon on remonterait le son "en douce" derrière un 🔈 éteint). */
+let soundEnabled = false;
 
 /** Un GainNode par nappe — clé = nom de nappe (voir NAPPE_CAPS). */
 const gains = {};
@@ -595,15 +607,17 @@ function setTarget(gainNode, value, now) {
 function fadeIn() {
   ensureContext();
   if (!audioCtx) return;
+  soundEnabled = true;
   clearTimeout(suspendTimer);
   if (audioCtx.state !== "running") audioCtx.resume();
   const now = audioCtx.currentTime;
   master.gain.cancelScheduledValues(now);
   master.gain.setValueAtTime(master.gain.value, now);
-  master.gain.linearRampToValueAtTime(MASTER_TARGET, now + MASTER_FADE);
+  master.gain.linearRampToValueAtTime(volumeTarget, now + MASTER_FADE);
 }
 
 function fadeOut() {
+  soundEnabled = false;
   if (!audioCtx) return;
   const now = audioCtx.currentTime;
   master.gain.cancelScheduledValues(now);
@@ -656,6 +670,28 @@ bus.addEventListener("soundchange", (event) => {
     fadeOut();
   }
 });
+
+/**
+ * Post-v1 — curseur de volume 🔈 : fixe la cible du fondu maître à partir
+ * d'un pourcentage [0,100] (voir `volumePercentToGain`, `timeEngine.js`).
+ * Appliquée immédiatement au graphe Web Audio (`setTargetAtTime`, doux, sans
+ * clic) SEULEMENT si le son est actuellement activé ; sinon la nouvelle
+ * cible attend simplement le prochain `fadeIn()` — glisser le curseur à 0 %
+ * pendant que 🔈 est éteint ne doit ni allumer ni pré-échauffer quoi que ce
+ * soit.
+ * @param {number} pct [0,100]
+ */
+export function setVolume(pct) {
+  volumeTarget = volumePercentToGain(pct);
+  if (!soundEnabled || !audioCtx || audioCtx.state !== "running") return;
+  const now = audioCtx.currentTime;
+  master.gain.setTargetAtTime(volumeTarget, now, VOLUME_TIME_CONSTANT);
+}
+
+/** Cible de volume courante [0,1] (curseur 🔈) — pour la vérification automatisée et pour que fadeIn() sache vers quoi remonter. */
+export function getVolume() {
+  return volumeTarget;
+}
 
 function scheduleEvents(weights, vapeurAudible, state, now) {
   if (weights.nature > MIN_AUDIBLE) {
@@ -785,6 +821,11 @@ export function debugState() {
   return {
     ctxState: audioCtx ? audioCtx.state : "uninitialized",
     masterGain: master ? Number(master.gain.value.toFixed(4)) : 0,
+    // Post-v1 : cible du curseur de volume — contrairement à masterGain
+    // (valeur COURANTE, encore en approche asymptotique juste après un
+    // glissement de curseur), volumeTarget est la valeur exacte visée, donc
+    // ce que la vérification automatisée (Playwright) doit lire.
+    volumeTarget: Number(volumeTarget.toFixed(4)),
     nappes,
   };
 }

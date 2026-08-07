@@ -37,13 +37,22 @@ const camera = new THREE.PerspectiveCamera(
   4000
 );
 
-/** @type {{year:number, weather:string, showLandmarks:boolean, voice:boolean, sound:boolean, qualityTier:string, reducedMotion:boolean, time:number, playing:boolean, playSpeed:number}} */
+/** @type {{year:number, weather:string, showLandmarks:boolean, voice:boolean, sound:boolean, soundVolume:number, voiceVolume:number, qualityTier:string, reducedMotion:boolean, time:number, playing:boolean, playSpeed:number}} */
 const state = {
   year: 2026,
   weather: "sun",
   showLandmarks: true,
   voice: false,
   sound: true,
+  // Post-v1 — curseurs de volume des popovers 🔈/🔊 (pourcentages [0,100],
+  // convertis en gain via `volumePercentToGain` juste avant usage) :
+  // soundVolume par défaut à 50 %, soit exactement `audio.MASTER_TARGET`
+  // (0,5) — le réglage qui existait déjà avant cette tâche ; voiceVolume par
+  // défaut à 100 %, le volume natif de `SpeechSynthesisUtterance` avant
+  // cette tâche. Aucun des deux réglages ne change donc le comportement par
+  // défaut, seulement ce qu'un enfant peut désormais ajuster.
+  soundVolume: 50,
+  voiceVolume: 100,
   // Tâche 18 — qualité graphique : "auto" par défaut (voir quality.js) ;
   // ui.js ne fait que refléter cette valeur sur le popover ⚙️ (4ᵉ chip
   // "Auto" en plus des 3 tiers manuels) — c'est le seul champ de `state`
@@ -175,6 +184,11 @@ narration.init({ scene, camera, canvas }, state);
 // l'architecture complète (contexte paresseux au premier geste, nappes
 // crossfadées par momentBlend comme la lumière).
 audio.init(ctx);
+// Post-v1 : aligne la cible du fondu maître sur state.soundVolume dès le
+// départ — coïncide avec audio.MASTER_TARGET aujourd'hui (50 % par défaut),
+// mais garde une seule source de vérité (state) plutôt que de compter sur
+// cette coïncidence.
+audio.setVolume(state.soundVolume);
 
 // ui.js never mutates `state` directly; it only emits bus events. This is
 // the one place that translates them into state mutations (or, for
@@ -230,6 +244,20 @@ ui.bus.addEventListener("voicechange", (event) => {
 });
 ui.bus.addEventListener("soundchange", (event) => {
   state.sound = event.detail.enabled;
+});
+// Post-v1 — curseur de volume du popover 🔈 : met à jour state (source de
+// vérité pour ui.js) puis répercute en direct sur le graphe Web Audio
+// (audio.js ignore l'appel lui-même si le son est actuellement coupé — voir
+// son docstring sur `soundEnabled`).
+ui.bus.addEventListener("soundvolumechange", (event) => {
+  state.soundVolume = event.detail.value;
+  audio.setVolume(state.soundVolume);
+});
+// Curseur du popover 🔊 : narration.js lit directement state.voiceVolume à
+// chaque `speak()` (via son propre `currentState`, synchronisé chaque frame
+// par narration.update) — pas d'appel explicite nécessaire ici.
+ui.bus.addEventListener("voicevolumechange", (event) => {
+  state.voiceVolume = event.detail.value;
 });
 ui.bus.addEventListener("landmarkschange", (event) => {
   state.showLandmarks = event.detail.show;
@@ -381,6 +409,9 @@ window.__paris = {
   narration: {
     state: () => narration.debugState(),
     voices: () => narration.debugVoices(),
+    // Post-v1 — curseur de volume 🔊 : pourcentage brut de state.voiceVolume
+    // (voir aussi audio.volumeTarget ci-dessous pour son équivalent 🔈).
+    voiceVolumePercent: () => narration.debugState().voiceVolumePercent,
   },
   // Tâche 17 — sons d'ambiance procéduraux. `rms()` lit l'AnalyserNode posé
   // juste après le gain maître (0 tant que 🔈 est éteint, ou que le contexte
@@ -389,6 +420,11 @@ window.__paris = {
     state: () => audio.debugState(),
     rms: () => audio.getMasterRMS(),
     analyser: () => audio.getAnalyser(),
+    // Post-v1 — curseur de volume 🔈 : cible EXACTE du fondu maître [0,1],
+    // contrairement à debugState().masterGain qui n'est que la valeur
+    // courante (encore en approche asymptotique juste après un glissement
+    // de curseur, via setTargetAtTime).
+    volumeTarget: () => audio.getVolume(),
   },
   // Tâche 16 — ▶️ Lecture : le voyage automatique. `tick(dt)` appelle le
   // même chemin que la boucle animate() (`advancePlayback`), ce qui permet

@@ -28,6 +28,21 @@ export function smoothstep(t) {
 }
 
 /**
+ * Post-v1 : convertit un pourcentage de curseur de volume [0,100] (la valeur
+ * native d'un `<input type="range">`) en gain linéaire [0,1] — délibérément
+ * pas de courbe logarithmique/psychoacoustique : un enfant qui met un
+ * curseur à 50 % attend "à moitié", pas une correction perceptuelle. Partagée
+ * par audio.js (curseur 🔈, gain du bus maître) et narration.js (curseur 🔊,
+ * `SpeechSynthesisUtterance.volume`) — même sémantique aux deux endroits, une
+ * seule fonction pure à tester (voir test/timeEngine.test.js).
+ * @param {number} pct
+ * @returns {number} [0,1]
+ */
+export function volumePercentToGain(pct) {
+  return Math.max(0, Math.min(100, pct)) / 100;
+}
+
+/**
  * "Back ease out": maps presence [0,1] to a visual growth factor that
  * slightly overshoots past 1 before settling — the "pop from foundations"
  * requested for building growth (task 8). f(0)=0, f(1)=1 exactly (so it

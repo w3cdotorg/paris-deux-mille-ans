@@ -19,6 +19,13 @@ test("shouldSpaceTogglePlayback : un AUTRE bouton focus (météo, voix, qualité
   assert.equal(shouldSpaceTogglePlayback("BUTTON", false), false);
 });
 
+// Post-v1 : curseurs de volume 🔈/🔊 (<input type="range">) — même garde que
+// pour les boutons, sinon régler le volume au clavier (Tab jusqu'au curseur,
+// Espace pour bouger la poignée) déclencherait AUSSI ▶️/⏸.
+test("shouldSpaceTogglePlayback : focus sur un <input> (curseur de volume) → ne toggle pas la lecture", () => {
+  assert.equal(shouldSpaceTogglePlayback("INPUT", false), false);
+});
+
 // ============================================================================
 // formatYear (déjà en usage — non testé jusqu'ici, couverture minimale)
 // ============================================================================

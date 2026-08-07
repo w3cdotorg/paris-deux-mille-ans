@@ -37,6 +37,7 @@ import { monumentStatesAt, visibleGroups, MONUMENTS as MONUMENT_SITES } from "./
 import { MONUMENT_FOOTPRINTS } from "./geography.js";
 import { groundHeightAt } from "./layers/terrain.js";
 import { bus, formatYear } from "./ui.js";
+import { volumePercentToGain } from "./timeEngine.js";
 
 // ============================================================================
 // Constantes
@@ -237,16 +238,21 @@ export function selectFrenchVoice(voiceList) {
 /**
  * Configure un `SpeechSynthesisUtterance` (ou tout objet compatible — pure,
  * testable avec une classe simulée) avec les réglages voix constants du
- * projet : français, débit 0,95, et la voix choisie par `selectFrenchVoice`.
+ * projet : français, débit 0,95, la voix choisie par `selectFrenchVoice`, et
+ * (post-v1) le volume [0,1] du curseur 🔊 — `1` par défaut, c'est-à-dire le
+ * volume natif de `SpeechSynthesisUtterance` avant que cette tâche n'existe,
+ * pour ne rien changer aux appels existants qui n'en passent pas.
  * @template T
  * @param {T} utterance
  * @param {object|null} voice
+ * @param {number} [volume=1] [0,1]
  * @returns {T}
  */
-export function configureUtterance(utterance, voice) {
+export function configureUtterance(utterance, voice, volume = 1) {
   utterance.lang = "fr-FR";
   utterance.rate = 0.95;
   utterance.voice = voice;
+  utterance.volume = volume;
   return utterance;
 }
 
@@ -268,7 +274,12 @@ function refreshVoices() {
 function speak(text) {
   if (!hasSpeech() || !frVoice) return false;
   window.speechSynthesis.cancel();
-  const utter = configureUtterance(new SpeechSynthesisUtterance(text), frVoice);
+  // Post-v1 : curseur de volume 🔊 (state.voiceVolume, pourcentage [0,100],
+  // 100 par défaut = volume natif inchangé) — même point d'entrée pour les
+  // trois voix (carte-récit auto, bouton voix de la carte, bouton voix de
+  // l'étiquette de monument) puisque toutes passent par cette fonction.
+  const volume = volumePercentToGain(currentState?.voiceVolume ?? 100);
+  const utter = configureUtterance(new SpeechSynthesisUtterance(text), frVoice, volume);
   window.speechSynthesis.speak(utter);
   return true;
 }
@@ -775,6 +786,8 @@ export function debugState() {
     population: currentState ? interpolatePopulation(currentState.year) : null,
     labelOpen: dom ? dom.label.classList.contains("pdma-open") : false,
     frVoiceAvailable: !!frVoice,
+    // Post-v1 : curseur de volume 🔊, pour la vérification automatisée.
+    voiceVolumePercent: currentState ? currentState.voiceVolume : null,
   };
 }
 

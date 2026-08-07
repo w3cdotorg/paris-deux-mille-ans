@@ -8,6 +8,7 @@ import {
   lerp,
   smoothstep,
   easeOutBack,
+  volumePercentToGain,
 } from "../src/timeEngine.js";
 import { MOMENTS } from "../src/timeline.js";
 
@@ -41,6 +42,25 @@ test("timeEngine: smoothstep(1) === 1", () => {
 
 test("timeEngine: smoothstep(0.5) === 0.5", () => {
   assert.strictEqual(smoothstep(0.5), 0.5);
+});
+
+// ============================================================================
+// volumePercentToGain (post-v1 : curseurs de volume 🔈/🔊)
+// ============================================================================
+
+test("volumePercentToGain : 0% -> 0, 50% -> 0.5 (défaut des deux curseurs), 100% -> 1", () => {
+  assert.strictEqual(volumePercentToGain(0), 0);
+  assert.strictEqual(volumePercentToGain(50), 0.5);
+  assert.strictEqual(volumePercentToGain(100), 1);
+});
+
+test("volumePercentToGain : mapping linéaire, pas de courbe (20% -> 0.2)", () => {
+  assert.strictEqual(volumePercentToGain(20), 0.2);
+});
+
+test("volumePercentToGain : clampe les valeurs hors [0,100]", () => {
+  assert.strictEqual(volumePercentToGain(-10), 0);
+  assert.strictEqual(volumePercentToGain(150), 1);
 });
 
 // ============================================================================

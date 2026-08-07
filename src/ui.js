@@ -57,7 +57,14 @@ export function formatYear(year) {
  * faisait déjà `preventDefault()` sans regarder `event.target`). Le bouton
  * ▶️/⏸ lui-même reste une exception assumée : sans elle, la même pression
  * activerait à la fois notre dispatch explicite ET le clic natif simulé par
- * le navigateur, pour un double toggle. Pure — testable sans DOM.
+ * le navigateur, pour un double toggle.
+ *
+ * Post-v1 : même garde étendue aux `<input>` (les curseurs de volume 🔈/🔊)
+ * — sans elle, un enfant qui règle le volume au clavier (Tab jusqu'au
+ * curseur, puis Espace) déclencherait ▶️/⏸ en même temps que la valeur du
+ * curseur, une interférence qu'aucune des deux actions ne justifie.
+ *
+ * Pure — testable sans DOM.
  * @param {string} targetTagName tagName (MAJUSCULES, comme le DOM le fournit)
  *   de `event.target` ou de son plus proche `<button>` ancêtre
  * @param {boolean} isPlayBtn vrai si cet élément est le bouton ▶️/⏸ lui-même
@@ -65,7 +72,7 @@ export function formatYear(year) {
  */
 export function shouldSpaceTogglePlayback(targetTagName, isPlayBtn) {
   if (isPlayBtn) return true;
-  return targetTagName !== "BUTTON";
+  return targetTagName !== "BUTTON" && targetTagName !== "INPUT";
 }
 
 // ============================================================================
@@ -86,6 +93,8 @@ let lastWeather = null;
 let lastShowLandmarks = null;
 let lastVoice = null;
 let lastSound = null;
+let lastSoundVolume = null;
+let lastVoiceVolume = null;
 let lastQualityTier = null;
 let lastPlaying = null;
 let lastPlaySpeed = null;
@@ -132,6 +141,63 @@ function createPopover(items, onSelect) {
   return pop;
 }
 
+/**
+ * Post-v1 : popover de volume pour 🔈 (sons d'ambiance) et 🔊 (voix) — même
+ * carte frostée que `createPopover` (vue d'ensemble/qualité), mais avec un
+ * contenu différent : une ligne "toggle" (bouton, affiche l'état ON/OFF, le
+ * clic bascule SANS fermer le popover — contrairement aux items de
+ * `createPopover` qui sélectionnent-puis-ferment) et une ligne curseur
+ * (`<input type="range">` natif, accessible clavier par construction).
+ *
+ * Choix simplicité (brief post-v1, option A retenue) : le bouton 🔈/🔊
+ * ouvre ce popover au clic plutôt que de basculer directement le son —
+ * un seul geste ("taper l'icône") révèle à la fois l'état et le réglage fin,
+ * cohérent avec 🏠/⚙️ déjà dans l'appli ; pas de second geste (appui long)
+ * à apprendre pour un public familial.
+ * @param {{sliderLabel: string, sliderValue: number, onToggle: () => void, onSlide: (value: number) => void}} opts
+ */
+function createVolumePopover({ sliderLabel, sliderValue, onToggle, onSlide }) {
+  const pop = document.createElement("div");
+  pop.className = "pdma-popover pdma-volume-popover";
+  pop.setAttribute("role", "menu");
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.className = "pdma-popover-btn pdma-volume-toggle";
+  toggleBtn.setAttribute("role", "menuitemcheckbox");
+  const toggleEmoji = document.createElement("span");
+  toggleEmoji.className = "pdma-popover-emoji";
+  const toggleText = document.createElement("span");
+  toggleBtn.appendChild(toggleEmoji);
+  toggleBtn.appendChild(toggleText);
+  // Le clic bascule ON/OFF mais NE ferme PAS le popover (contrairement aux
+  // items de createPopover) : l'utilisateur veut souvent régler le curseur
+  // juste après avoir (r)allumé — lui faire retaper l'icône serait un geste
+  // de trop.
+  toggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onToggle();
+  });
+  pop.appendChild(toggleBtn);
+
+  const sliderRow = document.createElement("div");
+  sliderRow.className = "pdma-slider-row";
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = "0";
+  slider.max = "100";
+  slider.step = "1";
+  slider.value = String(sliderValue);
+  slider.className = "pdma-slider";
+  slider.setAttribute("aria-label", sliderLabel);
+  slider.addEventListener("click", (e) => e.stopPropagation());
+  slider.addEventListener("input", () => onSlide(Number(slider.value)));
+  sliderRow.appendChild(slider);
+  pop.appendChild(sliderRow);
+
+  return { pop, toggleBtn, toggleEmoji, toggleText, slider };
+}
+
 function closePopovers() {
   if (openPopover) {
     openPopover.classList.remove("pdma-open");
@@ -174,19 +240,46 @@ function buildDOM() {
   viewsWrap.appendChild(viewsPopover);
   viewsBtn.addEventListener("click", () => togglePopover(viewsPopover));
 
+  // Post-v1 : 🔊/🔈 ouvrent chacun un popover (même mécanique que 🏠/⚙️
+  // ci-dessous) contenant la ligne toggle ON/OFF ET le curseur de volume —
+  // voir le docstring de createVolumePopover pour le choix de conception.
+  const voiceWrap = document.createElement("div");
+  voiceWrap.className = "pdma-btn-wrap";
   const voiceBtn = createIconButton("🔊", "Voix");
-  voiceBtn.addEventListener("click", () => {
-    bus.dispatchEvent(
-      new CustomEvent("voicechange", { detail: { enabled: !currentState.voice } })
-    );
+  const voicePopover = createVolumePopover({
+    sliderLabel: "Volume de la voix",
+    sliderValue: currentState.voiceVolume,
+    onToggle: () => {
+      bus.dispatchEvent(
+        new CustomEvent("voicechange", { detail: { enabled: !currentState.voice } })
+      );
+    },
+    onSlide: (value) => {
+      bus.dispatchEvent(new CustomEvent("voicevolumechange", { detail: { value } }));
+    },
   });
+  voiceWrap.appendChild(voiceBtn);
+  voiceWrap.appendChild(voicePopover.pop);
+  voiceBtn.addEventListener("click", () => togglePopover(voicePopover.pop));
 
+  const soundWrap = document.createElement("div");
+  soundWrap.className = "pdma-btn-wrap";
   const soundBtn = createIconButton("🔈", "Sons");
-  soundBtn.addEventListener("click", () => {
-    bus.dispatchEvent(
-      new CustomEvent("soundchange", { detail: { enabled: !currentState.sound } })
-    );
+  const soundPopover = createVolumePopover({
+    sliderLabel: "Volume des sons",
+    sliderValue: currentState.soundVolume,
+    onToggle: () => {
+      bus.dispatchEvent(
+        new CustomEvent("soundchange", { detail: { enabled: !currentState.sound } })
+      );
+    },
+    onSlide: (value) => {
+      bus.dispatchEvent(new CustomEvent("soundvolumechange", { detail: { value } }));
+    },
   });
+  soundWrap.appendChild(soundBtn);
+  soundWrap.appendChild(soundPopover.pop);
+  soundBtn.addEventListener("click", () => togglePopover(soundPopover.pop));
 
   const landmarksBtn = createIconButton("📍", "Repères");
   landmarksBtn.addEventListener("click", () => {
@@ -221,8 +314,8 @@ function buildDOM() {
   qualityBtn.addEventListener("click", () => togglePopover(qualityPopover));
 
   buttonsRow.appendChild(viewsWrap);
-  buttonsRow.appendChild(voiceBtn);
-  buttonsRow.appendChild(soundBtn);
+  buttonsRow.appendChild(voiceWrap);
+  buttonsRow.appendChild(soundWrap);
   buttonsRow.appendChild(landmarksBtn);
   buttonsRow.appendChild(weatherBtn);
   buttonsRow.appendChild(zonesBtn);
@@ -400,7 +493,9 @@ function buildDOM() {
     handle,
     momentButtons,
     voiceBtn,
+    voicePopover,
     soundBtn,
+    soundPopover,
     landmarksBtn,
     weatherBtn,
     qualityPopover,
@@ -508,11 +603,34 @@ function syncFromState(state) {
   if (state.voice !== lastVoice) {
     lastVoice = state.voice;
     dom.voiceBtn.classList.toggle("pdma-pressed", state.voice);
+    const { toggleBtn, toggleEmoji, toggleText } = dom.voicePopover;
+    toggleBtn.classList.toggle("pdma-pressed", state.voice);
+    toggleBtn.setAttribute("aria-checked", String(state.voice));
+    toggleEmoji.textContent = state.voice ? "🔊" : "🔇";
+    toggleText.textContent = state.voice ? "Voix : activée" : "Voix : coupée";
   }
 
   if (state.sound !== lastSound) {
     lastSound = state.sound;
     dom.soundBtn.classList.toggle("pdma-pressed", state.sound);
+    const { toggleBtn, toggleEmoji, toggleText } = dom.soundPopover;
+    toggleBtn.classList.toggle("pdma-pressed", state.sound);
+    toggleBtn.setAttribute("aria-checked", String(state.sound));
+    toggleEmoji.textContent = state.sound ? "🔈" : "🔇";
+    toggleText.textContent = state.sound ? "Sons : activés" : "Sons : coupés";
+  }
+
+  // Post-v1 : curseurs de volume — resynchronisés si state change par une
+  // autre voie que le curseur lui-même (ex. window.__paris futur, ou juste
+  // la première frame après init()) ; idempotent quand le changement VIENT
+  // du curseur (la valeur qu'on réécrit est déjà celle qu'il affiche).
+  if (state.soundVolume !== lastSoundVolume) {
+    lastSoundVolume = state.soundVolume;
+    dom.soundPopover.slider.value = String(state.soundVolume);
+  }
+  if (state.voiceVolume !== lastVoiceVolume) {
+    lastVoiceVolume = state.voiceVolume;
+    dom.voicePopover.slider.value = String(state.voiceVolume);
   }
 
   if (state.qualityTier !== lastQualityTier) {
@@ -556,6 +674,8 @@ export function init(state) {
   lastShowLandmarks = null;
   lastVoice = null;
   lastSound = null;
+  lastSoundVolume = null;
+  lastVoiceVolume = null;
   lastQualityTier = null;
   lastPlaying = null;
   lastPlaySpeed = null;

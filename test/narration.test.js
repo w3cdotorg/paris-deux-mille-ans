@@ -320,3 +320,25 @@ test("configureUtterance : renvoie l'instance elle-même (chaînable), pas une c
   const returned = configureUtterance(instance, null);
   assert.equal(returned, instance);
 });
+
+// ============================================================================
+// configureUtterance : volume — curseur 🔊 (post-v1)
+// ============================================================================
+
+test("configureUtterance : volume par défaut à 1 quand non précisé (comportement natif inchangé)", () => {
+  class FakeUtterance {}
+  const utter = configureUtterance(new FakeUtterance(), null);
+  assert.equal(utter.volume, 1);
+});
+
+test("configureUtterance : pose le volume fourni (curseur 🔊 à 30% -> 0.3)", () => {
+  class FakeUtterance {}
+  const utter = configureUtterance(new FakeUtterance(), null, 0.3);
+  assert.equal(utter.volume, 0.3);
+});
+
+test("configureUtterance : volume 0 (curseur au minimum) accepté tel quel", () => {
+  class FakeUtterance {}
+  const utter = configureUtterance(new FakeUtterance(), null, 0);
+  assert.equal(utter.volume, 0);
+});
