@@ -274,6 +274,8 @@ let noiseBuffer = null;
 let cameraRef = null;
 let suspendTimer = null;
 let tickAccum = 0;
+let shouldAutoStartOnGesture = false;
+let gestureListenerAttached = false;
 
 /** Un GainNode par nappe — clé = nom de nappe (voir NAPPE_CAPS). */
 const gains = {};
@@ -615,12 +617,44 @@ function fadeOut() {
   }, MASTER_FADE * 1000 + 60);
 }
 
+function attachGestureListener() {
+  if (gestureListenerAttached) return;
+  gestureListenerAttached = true;
+
+  const handleGesture = () => {
+    if (shouldAutoStartOnGesture) {
+      shouldAutoStartOnGesture = false;
+      fadeIn();
+    }
+    document.removeEventListener("pointerdown", handleGesture);
+    document.removeEventListener("keydown", handleGesture);
+  };
+
+  document.addEventListener("pointerdown", handleGesture, true);
+  document.addEventListener("keydown", handleGesture, true);
+}
+
 // Écouteur direct sur le bus (même famille que narration.js et son écouteur
 // "showzones") : c'est le clic sur 🔈 lui-même qui sert de "geste utilisateur"
 // pour l'autoplay — voir le docstring en tête de fichier.
+// Si sound est activé AVANT un geste utilisateur (son par défaut ON), on arme
+// le drapeau shouldAutoStartOnGesture ; le premier clic/touche/clavier l'amorce.
+// Cliquer 🔈 pour désactiver AVANT le geste annule le démarrage en attente.
 bus.addEventListener("soundchange", (event) => {
-  if (event.detail.enabled) fadeIn();
-  else fadeOut();
+  if (event.detail.enabled) {
+    // Son activé : si pas de contexte encore, armer le drapeau pour le geste
+    if (!audioCtx) {
+      shouldAutoStartOnGesture = true;
+      attachGestureListener();
+    } else {
+      // Contexte existe déjà, fade in maintenant
+      fadeIn();
+    }
+  } else {
+    // Son désactivé : cancel le démarrage en attente et fade out
+    shouldAutoStartOnGesture = false;
+    fadeOut();
+  }
 });
 
 function scheduleEvents(weights, vapeurAudible, state, now) {
@@ -673,6 +707,10 @@ function scheduleEvents(weights, vapeurAudible, state, now) {
 /** @param {{camera: object}} ctx Même `ctx` que les couches 3D — seule `camera` nous intéresse (distance aux anneaux). */
 export function init(ctx) {
   cameraRef = ctx.camera ?? null;
+  // Son ON par défaut (state.sound = true) — armer le drapeau pour démarrage
+  // au premier geste utilisateur (respect politique autoplay navigateur).
+  shouldAutoStartOnGesture = true;
+  attachGestureListener();
 }
 
 /**

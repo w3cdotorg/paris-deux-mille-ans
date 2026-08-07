@@ -42,7 +42,7 @@ const state = {
   weather: "sun",
   showLandmarks: true,
   voice: false,
-  sound: false,
+  sound: true,
   // Tâche 18 — qualité graphique : "auto" par défaut (voir quality.js) ;
   // ui.js ne fait que refléter cette valeur sur le popover ⚙️ (4ᵉ chip
   // "Auto" en plus des 3 tiers manuels) — c'est le seul champ de `state`
