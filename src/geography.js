@@ -120,6 +120,12 @@ export const LANDMARKS = {
   // (|z| = 2,8 à cet endroit), arrivée sur la rive droite après ~8,4 unités,
   // soit au-delà du bord nord de l'eau (z ≈ -9,6 pour x ≈ -5,5).
   pontAuChange: { x: -8.6, z: -6.6 },
+  // Tour Saint-Jacques (48,8580 N, 2,3488 E environ) : rive droite, au nord
+  // du pont au Change, dans l'axe nord-sud de l'île. Repositionnée un peu à
+  // l'écart de rueDeRivoli (roads.js) — le tracé Louvre→Bastille passe à
+  // ~6 unités d'ici, largement hors du dégagement du site (voir
+  // MONUMENT_FOOTPRINTS ci-dessous) — et loin de tout autre monument.
+  tourSaintJacques: { x: -8, z: -56 },
 };
 
 /**
@@ -165,6 +171,11 @@ export const MONUMENT_FOOTPRINTS = [
   // par rotation — un disque calé sur la boîte englobante locale se décalerait
   // dès que le quartier pivote.
   { id: "laDefense", x: -834, z: -433, r: 17.0 },
+  // Tâche 15 : la tour Saint-Jacques et l'église disparue qui l'accompagnait
+  // (jusqu'en 1793). Centre décalé vers l'est de l'ancre du site : la tour
+  // (à l'ancre) est plus étroite que la nef + le chevet, qui s'étendent vers
+  // l'est — voir monumentModels.js.
+  { id: "tourSaintJacques", x: -5.74, z: -56, r: 3.3 },
 ];
 
 /**

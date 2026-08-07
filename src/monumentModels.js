@@ -1186,6 +1186,145 @@ export function buildInvalides() {
 }
 
 // ============================================================================
+// ÉGLISE SAINT-JACQUES-DE-LA-BOUCHERIE + SA TOUR — l'histoire d'une survivante
+// ============================================================================
+//
+// Un seul site (rive droite, près du pont au Change), deux modèles qui ne
+// meurent pas ensemble : l'église paroissiale (1300-1793, vendue et démolie
+// pierre par pierre à la Révolution) et son clocher flamboyant (1509-1523),
+// qui lui *survit* — depuis 1797 il se dresse seul au milieu d'un square, la
+// seule pièce du site qui n'a jamais été rasée.
+//
+// Les deux modèles partagent la même ancre de site (x, z) — comme la flèche
+// de Notre-Dame partage l'ancre de la cathédrale : l'offset entre les deux
+// est *baked* dans les modèles, pas dans le registre. Ici, la tour est
+// centrée sur l'ancre (c'était son pied réel, à l'angle ouest de la nef) et
+// la nef de l'église s'étend vers l'est à partir de ce même point, contre le
+// pied de la tour — exactement la convention ouest-tour / est-chevet déjà
+// utilisée par `buildCathedraleGothique`.
+
+/** Demi-côté du fût de la tour — partagé avec l'église pour caler sa façade
+ * ouest exactement contre le pied de la tour. */
+const TSJ_TOWER_HALF = 0.5;
+
+/**
+ * L'église Saint-Jacques-de-la-Boucherie (1300-1793) : nef modeste, deux
+ * chapelles latérales en légère saillie, chevet à pans coupés — une paroisse
+ * de quartier, pas une cathédrale (d'où une nef bien plus basse et bien plus
+ * courte que celle de Notre-Dame). Démolie sous la Révolution — vendue comme
+ * carrière de pierre —, il n'en reste rien aujourd'hui, sauf sa tour,
+ * modélisée à part par `buildTourSaintJacques`.
+ */
+export function buildEgliseSaintJacques() {
+  const g = newModel("egliseSaintJacques");
+  const NAVE_LEN = 3.4;
+  const NAVE_H = 2.2;
+  const NAVE_W = 1.5;
+  // Façade ouest : contre le pied de la tour, avec un petit jeu pour éviter
+  // que les deux modèles ne s'interpénètrent visuellement.
+  const naveX0 = TSJ_TOWER_HALF + 0.05;
+  const naveCx = naveX0 + NAVE_LEN / 2;
+
+  // nef
+  box(g, "stone", { x: naveCx, z: 0, y0: 0, w: NAVE_LEN, h: NAVE_H, d: NAVE_W });
+  gable(g, "slate", { x: naveCx, z: 0, y0: NAVE_H, w: NAVE_LEN, h: 0.9, d: NAVE_W });
+
+  // deux chapelles latérales, en légère saillie sur les bas-côtés
+  for (const sz of [-1, 1]) {
+    const z = sz * (NAVE_W / 2 + 0.18);
+    box(g, "stoneShadow", { x: naveCx, z, y0: 0, w: 1.0, h: 1.3, d: 0.36 });
+    gable(g, "slate", { x: naveCx, z, y0: 1.3, w: 0.36, h: 0.4, d: 1.0, rotY: Math.PI / 2 });
+  }
+
+  // petit portail sur la façade ouest, juste contre la tour
+  box(g, "stoneLight", { x: naveX0 + 0.12, z: 0, y0: 0, w: 0.24, h: 1.05, d: NAVE_W * 0.55 });
+
+  // chevet à pans coupés, à l'est — même traitement que celui de la
+  // cathédrale gothique (cyl + cône à 7 pans), en plus modeste.
+  const apseX = naveX0 + NAVE_LEN + 0.5;
+  cyl(g, "stone", { x: apseX, z: 0, y0: 0, w: 1.3, h: 1.8, d: 1.3, segs: 7 });
+  cone(g, "slate", { x: apseX, z: 0, y0: 1.8, w: 1.45, h: 0.7, segs: 7 });
+
+  return g;
+}
+
+/**
+ * La tour Saint-Jacques (1509-1523) : clocher gothique flamboyant élancé —
+ * fût carré à contreforts d'angle, un beffroi ajouré (le dernier étage,
+ * suggéré par deux bandeaux sombres, même procédé que les verrières de la
+ * Sainte-Chapelle), quatre pinacles d'angle et une flèche centrale sur la
+ * terrasse des statues. 52 m réels ; volontairement lue à ~5,4 unités (un peu
+ * au-dessus de l'échelle stricte) pour qu'elle domine franchement le tissu
+ * urbain environnant à cette distance de vue, sans pour autant rivaliser avec
+ * les tours de Notre-Dame (7,4 unités) — c'est un clocher de paroisse, pas
+ * une cathédrale. Ne meurt jamais : seule pièce du site encore debout
+ * aujourd'hui, seule au milieu de son square.
+ */
+export function buildTourSaintJacques() {
+  const g = newModel("tourSaintJacques");
+  const W = TSJ_TOWER_HALF * 2;
+  const SHAFT_H = 3.8;
+  const BELFRY_H = 0.9;
+  const BELFRY_W = 0.82;
+  const TERRACE_H = 0.18;
+  const TERRACE_W = 0.95;
+  const CORNERS = [
+    [-1, -1],
+    [-1, 1],
+    [1, -1],
+    [1, 1],
+  ];
+
+  // fût carré
+  box(g, "stoneLight", { x: 0, z: 0, y0: 0, w: W, h: SHAFT_H, d: W });
+  // 4 lignes de contreforts verticaux, aux angles — filent du sol jusqu'au
+  // sommet du beffroi, la signature « gothique » vue de près.
+  for (const [sx, sz] of CORNERS) {
+    box(g, "stoneShadow", {
+      x: sx * (TSJ_TOWER_HALF + 0.08),
+      z: sz * (TSJ_TOWER_HALF + 0.08),
+      y0: 0,
+      w: 0.16,
+      h: SHAFT_H + BELFRY_H,
+      d: 0.16,
+    });
+  }
+
+  // le beffroi (dernier étage, ajouré) — deux bandeaux sombres plaqués sur
+  // les faces est/ouest suggèrent les baies ouvertes du clocher.
+  box(g, "stoneLight", { x: 0, z: 0, y0: SHAFT_H, w: BELFRY_W, h: BELFRY_H, d: BELFRY_W });
+  for (const sx of [-1, 1]) {
+    box(g, "glassDark", {
+      x: sx * (BELFRY_W / 2 + 0.02),
+      z: 0,
+      y0: SHAFT_H + 0.15,
+      w: 0.05,
+      h: 0.6,
+      d: 0.42,
+    });
+  }
+
+  // terrasse des statues (légère corniche en surplomb) + pinacles d'angle +
+  // flèche centrale.
+  const terraceY = SHAFT_H + BELFRY_H;
+  box(g, "stoneShadow", { x: 0, z: 0, y0: terraceY, w: TERRACE_W, h: TERRACE_H, d: TERRACE_W });
+  const pinnacleY = terraceY + TERRACE_H;
+  for (const [sx, sz] of CORNERS) {
+    cone(g, "stoneLight", {
+      x: sx * (TERRACE_W / 2 - 0.1),
+      z: sz * (TERRACE_W / 2 - 0.1),
+      y0: pinnacleY,
+      w: 0.26,
+      h: 0.42,
+      segs: 6,
+    });
+  }
+  cone(g, "stoneLight", { x: 0, z: 0, y0: pinnacleY, w: 0.34, h: 0.55, segs: 8 });
+
+  return g;
+}
+
+// ============================================================================
 // TOUR EIFFEL (1887-1889) — le monument qui monte ÉTAGE PAR ÉTAGE
 // ============================================================================
 //
@@ -1896,6 +2035,9 @@ export const MODEL_BUILDERS = {
   sainteChapelle: buildSainteChapelle,
   pantheon: buildPantheon,
   invalides: buildInvalides,
+  // --- tâche 15 -------------------------------------------------------------
+  egliseSaintJacques: buildEgliseSaintJacques,
+  tourSaintJacques: buildTourSaintJacques,
   // --- tâche 11 -----------------------------------------------------------
   tourEiffel: buildTourEiffel,
   sacreCoeur: buildSacreCoeur,
