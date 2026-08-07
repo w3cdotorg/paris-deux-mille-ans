@@ -11,6 +11,7 @@ import {
   crowdCountForPopulation,
   crowdCountForYear,
   generateCrowdSlots,
+  boatLateral,
   vignettePresence,
   vignetteActive,
   init as initLife,
@@ -21,7 +22,13 @@ import {
   stats,
 } from "../src/layers/life.js";
 import { MOMENTS } from "../src/timeline.js";
-import { distanceToSeine } from "../src/geography.js";
+import {
+  distanceToSeine,
+  isOverSeineWater,
+  isOnPermanentIsland,
+  seineHalfWidthAt,
+  ISLANDS,
+} from "../src/geography.js";
 
 function fakeState(year, extra = {}) {
   return { year, time: 3.5, weather: "sun", reducedMotion: false, ...extra };
@@ -184,15 +191,41 @@ test("generateCrowdSlots : aucun emplacement dans le lit de la Seine (review Tâ
   // Capacité pleine (3000) : c'est là que le hotspot du Pont-au-Change (le
   // cas réel identifié en review) tire le plus de points, donc le test qui
   // couvre le mieux la régression.
+  //
+  // Post-v2 : l'invariant est « pas dans l'eau », pas « à plus de 7,5 unités de
+  // l'axe ». Deux raisons, toutes deux voulues : (1) le lit s'élargit à 12 de
+  // demi-largeur devant les îles, donc 7,5 n'y suffit plus ; (2) la terre ferme
+  // de la Cité et de Saint-Louis est *à l'intérieur* du lit et pourtant sèche —
+  // la foule doit pouvoir se presser sur le parvis de Notre-Dame, au milieu du
+  // fleuve. `isOverSeineWater` porte exactement cette sémantique.
   const slots = generateCrowdSlots(CROWD_MAX);
   assert.equal(slots.length, CROWD_MAX);
-  let worst = Infinity;
+  let onIsland = 0;
   for (const s of slots) {
-    const d = distanceToSeine(s.x, s.z);
-    if (d < worst) worst = d;
-    assert.ok(d >= 7.5, `emplacement (${s.x.toFixed(2)}, ${s.z.toFixed(2)}) à ${d.toFixed(2)}u de la Seine — sous le seuil de 7.5u, il serait rendu au niveau du lit`);
+    assert.ok(
+      !isOverSeineWater(s.x, s.z, 0.5),
+      `emplacement (${s.x.toFixed(2)}, ${s.z.toFixed(2)}) dans le lit de la Seine (bord de l'eau à ${seineHalfWidthAt(s.x, s.z).toFixed(1)}u de l'axe, point à ${distanceToSeine(s.x, s.z).toFixed(2)}u)`
+    );
+    if (isOnPermanentIsland(s.x, s.z)) onIsland++;
   }
-  assert.ok(worst >= 7.5);
+  // Et la foule tient bien sur l'île : sans ça, le parvis de Notre-Dame — le
+  // hotspot le plus lourd de la table — serait désert.
+  assert.ok(onIsland > 0, "aucune silhouette sur l'île de la Cité ni sur Saint-Louis");
+});
+
+test("boatLateral : la flotte prend le bras nord en longeant les îles, et garde son tirage ailleurs", () => {
+  // Loin des îles (aval, vers (-152, -95)) : le tirage aléatoire est intact.
+  assert.equal(boatLateral(-3.2, -152, -95), -3.2);
+  assert.equal(boatLateral(4.4, -152, -95), 4.4);
+
+  // Au centre de la Cité, l'axe navigable traverse l'île : tout bateau est
+  // repoussé dans le bras **nord** (latéral positif), entre la rive de l'île
+  // (~6,2 de l'axe) et le bord de l'eau (12).
+  for (const draw of [-4.5, -1, 0, 2.3, 4.5]) {
+    const lat = boatLateral(draw, ISLANDS.cite.x, ISLANDS.cite.z);
+    assert.ok(lat > 6.6, `latéral ${lat.toFixed(2)} : le bateau monterait sur l'île`);
+    assert.ok(lat < 11.4, `latéral ${lat.toFixed(2)} : le bateau monterait sur la berge`);
+  }
 });
 
 // ============================================================================

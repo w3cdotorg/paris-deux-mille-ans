@@ -1,8 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "three";
-import { groundUrbanBlend, isForestCandidate, init, setQuality, stats, forceRescan } from "../src/layers/terrain.js";
-import { urbanYear } from "../src/geography.js";
+import {
+  groundUrbanBlend,
+  isForestCandidate,
+  islandProfile,
+  islandFreeboardAt,
+  groundHeightAt,
+  seineWaterHeightAt,
+  init,
+  setQuality,
+  stats,
+  forceRescan,
+} from "../src/layers/terrain.js";
+import {
+  urbanYear,
+  ISLANDS,
+  LANDMARKS,
+  seineHalfWidthAt,
+  isOnPermanentIsland,
+  distanceToSeine,
+} from "../src/geography.js";
 
 function fakeCtx(quality) {
   return { scene: new THREE.Scene(), quality };
@@ -80,6 +98,93 @@ test("isForestCandidate: the Seine margin boundary is land-inclusive, water just
 
 test("isForestCandidate: a cell that just urbanized (uYear === year) is excluded", () => {
   assert.equal(isForestCandidate(20, 2026, 2026, 9), false);
+});
+
+
+// ============================================================================
+// Îles (post-v2) — « l'île est une terre au milieu du fleuve »
+// ============================================================================
+
+test("islandProfile : plateau plein au coeur, zéro au trait de rive, décroissant entre les deux", () => {
+  assert.equal(islandProfile(0), 1);
+  assert.equal(islandProfile(0.5), 1);
+  assert.equal(islandProfile(0.82), 1); // exactement au bord du plateau
+  assert.equal(islandProfile(1), 0);
+  assert.equal(islandProfile(1.2), 0);
+  let previous = 1;
+  for (let k = 0.82; k <= 1.001; k += 0.02) {
+    const value = islandProfile(k);
+    assert.ok(value <= previous + 1e-9, `remontée du profil à k=${k.toFixed(2)}`);
+    assert.ok(value >= 0 && value <= 1);
+    previous = value;
+  }
+});
+
+test("islandFreeboardAt : franc-bord plein sur les deux îles, nul sur les berges", () => {
+  const cite = islandFreeboardAt(ISLANDS.cite.x, ISLANDS.cite.z);
+  const stl = islandFreeboardAt(ISLANDS.saintLouis.x, ISLANDS.saintLouis.z);
+  assert.ok(cite > 1.5, `franc-bord de la Cité : ${cite}`);
+  assert.equal(stl, cite, "les deux îles ont le même franc-bord");
+  // Notre-Dame et la Sainte-Chapelle sont sur le plateau, pas sur le talus.
+  assert.equal(islandFreeboardAt(LANDMARKS.notreDame.x, LANDMARKS.notreDame.z), cite);
+  assert.equal(islandFreeboardAt(LANDMARKS.sainteChapelle.x, LANDMARKS.sainteChapelle.z), cite);
+  // Rives et campagne : rien du tout.
+  assert.equal(islandFreeboardAt(0, 30), 0);
+  assert.equal(islandFreeboardAt(-152, -95), 0);
+  assert.equal(islandFreeboardAt(ISLANDS.louviers.x, ISLANDS.louviers.z), 0);
+});
+
+test("les deux îles émergent réellement du plan d'eau rendu (le test du gamin, en chiffres)", () => {
+  const ctx = fakeCtx({ trees: 0.4 });
+  init(ctx);
+  forceRescan(-250);
+
+  for (const [name, isl] of [["Cité", ISLANDS.cite], ["Saint-Louis", ISLANDS.saintLouis]]) {
+    const top = groundHeightAt(isl.x, isl.z);
+    const water = seineWaterHeightAt(isl.x, isl.z);
+    assert.ok(
+      top - water > 1.2,
+      `${name} : plateau à ${top.toFixed(2)}, eau à ${water.toFixed(2)} — l'île se noie`
+    );
+  }
+
+  // Notre-Dame, au centre de l'île, est au sec sur le plateau.
+  const nd = groundHeightAt(LANDMARKS.notreDame.x, LANDMARKS.notreDame.z);
+  assert.ok(nd - seineWaterHeightAt(0, 0) > 1.2, "Notre-Dame a les pieds dans l'eau");
+
+  // Et de chaque côté de la Cité, mesuré le long de la normale au fleuve : de
+  // l'eau (donc PAS de terre d'île), plus haute que le lit, sur les deux bras.
+  const n = { x: 0.342, z: -0.94 };
+  for (const side of [1, -1]) {
+    const probe = seineHalfWidthAt(0, 0) - 2; // 2 unités en dedans du bord
+    const px = n.x * side * probe;
+    const pz = n.z * side * probe;
+    assert.equal(
+      isOnPermanentIsland(px, pz),
+      false,
+      `bras ${side > 0 ? "nord" : "sud"} : la terre de l'île y arrive encore`
+    );
+    assert.ok(
+      distanceToSeine(px, pz) < seineHalfWidthAt(px, pz),
+      `bras ${side > 0 ? "nord" : "sud"} : le point sondé n'est pas dans le lit`
+    );
+    assert.ok(
+      seineWaterHeightAt(px, pz) > groundHeightAt(px, pz) - 0.01,
+      `bras ${side > 0 ? "nord" : "sud"} : le plan d'eau passe sous le sol`
+    );
+  }
+
+  const s = stats();
+  assert.equal(s.islandMeshes, 2, "les deux îles doivent avoir leur maillage");
+});
+
+test("stats() expose de quoi vérifier mécaniquement que la Cité émerge", () => {
+  const ctx = fakeCtx({ trees: 0.4 });
+  init(ctx);
+  forceRescan(1400);
+  const s = stats();
+  assert.ok(s.citeTopY - s.citeWaterY > 1.2);
+  assert.ok(Number.isFinite(s.saintLouisTopY));
 });
 
 // ============================================================================

@@ -22,6 +22,7 @@ import {
   heightAt,
   urbanYear,
   distanceToSeine,
+  seineHalfWidthAt,
   SEINE_POINTS,
   SEINE_ONMAP_COUNT,
   ISLANDS,
@@ -56,13 +57,23 @@ const FOREST_X_MAX = 700;
 const FOREST_Z_MIN = -800;
 const FOREST_Z_MAX = 800;
 
-// Ground within this distance (world units) of the Seine centerline reads
-// as underwater, fading to dry land by RIVER_WATER_FADE. Deliberately a
-// *spatial* mask rather than a height threshold: heightAt()'s base terrain
-// noise alone swings ±0.4, which would otherwise false-positive as "water"
-// on ordinary dry land far from any river.
-const RIVER_WATER_CORE = 6;
-const RIVER_WATER_FADE = 10;
+// Teinte d'eau du sol — post-v2, « berges nettes ».
+//
+// Avant : la teinte partait de 6 unités de l'axe et ne s'éteignait qu'à 16
+// (RIVER_WATER_CORE=6 / RIVER_WATER_FADE=10), soit un halo bleu-vert de 9
+// unités *au-delà* du bord de l'eau. Sur un maillage de sol dont les mailles
+// font 15 à 17 unités, ce dégradé s'étalait encore plus : c'est lui — et pas
+// l'eau — qui donnait le « gros bourrelet sombre » au milieu duquel plus rien
+// ne se lisait.
+//
+// Désormais la teinte est calée sur le *bord de l'eau* réel
+// (`seineHalfWidthAt`, qui s'élargit autour des îles) : pleine jusqu'à
+// `SHORELINE_INSET` en deçà du bord, éteinte `SHORELINE_FADE` au-delà. Elle
+// n'est plus qu'un fond sous le ruban d'eau ; la netteté du trait de côte vient
+// du ruban lui-même et de la lisière de berge (`buildRiverBanks`), tous deux
+// maillés assez fin pour porter une arête.
+const SHORELINE_INSET = 1;
+const SHORELINE_FADE = 3;
 
 // Half-width, in years, of the forest<->urban color transition band. Wide on
 // purpose: urbanYear() bakes in ±40-80y of organic noise for irregular growth
@@ -71,13 +82,46 @@ const RIVER_WATER_FADE = 10;
 // threshold (see rescanForest), so the retreat itself still reads crisply.
 const TRANSITION_YEARS = 110;
 
-const ISLAND_BUMP_AMPLITUDE = 2.4; // Cité, Saint-Louis: always raised
+// --- Îles : la Cité et Saint-Louis sont de la TERRE, pas des bosses ---------
+//
+// Post-v2. Avant : les deux îles n'étaient qu'une gaussienne (+2,4) ajoutée aux
+// sommets du maillage de sol. Or ce maillage a des mailles de 15,6 × 17,2
+// unités, et l'île de la Cité mesure 24 × 10 : **elle était plus petite qu'une
+// maille**, donc littéralement irreprésentable — la bosse se réduisait à une
+// tente grossière qui masquait tout juste l'eau sans jamais se lire comme une
+// terre. Notre-Dame se dressait au milieu du fleuve.
+//
+// Les deux îles ont désormais leur propre maillage (`buildIslands`), radial et
+// fin, dont la surface vaut exactement `groundHeightAt` : tout ce qui se pose au
+// sol (huttes gauloises, Notre-Dame, Sainte-Chapelle, foule) reste donc d'aplomb
+// sur l'île sans qu'aucun consommateur ne connaisse leur existence.
+//
+// 1,7 unité de franc-bord (17 m) : l'île réelle domine la Seine de 5 à 8 m, et
+// tout le relief de la scène est exagéré ×2,6 (voir RELIEF_EXAGGERATION dans
+// geography.js) — 1,7 est donc l'échelle cohérente, et c'est ce qu'il faut pour
+// que l'île se lise comme une terre habitée et non comme un banc de sable.
+const ISLAND_FREEBOARD = 1.7;
+// Rayon normalisé (ellipse) où commence le talus de berge : plateau plein en
+// deçà, descente jusqu'au niveau du lit à k = 1. Pour la Cité, 0,82 → 1 vaut
+// 0,9 unité en z : un talus franc, qui donne l'arête de rive demandée.
+const ISLAND_PLATEAU_K = 0.82;
+// Anneau immergé qui prolonge l'île sous l'eau : garantit qu'aucun interstice
+// n'apparaît entre la rive et le ruban d'eau, quel que soit l'angle de vue.
+const ISLAND_SKIRT_K = 1.06;
+const ISLAND_SKIRT_DROP = 0.5;
+const ISLAND_RADIAL_SEGMENTS = 56;
+// Anneaux radiaux : resserrés autour du talus (0,82 → 1) pour porter l'arête.
+const ISLAND_RINGS = [0, 0.4, 0.66, ISLAND_PLATEAU_K, 0.89, 0.95, 1, ISLAND_SKIRT_K];
+
 const LOUVIERS_BUMP_AMPLITUDE = 2.0;
 const LOUVIERS_CHANNEL_DEPTH = 1.8; // "bras mort" separating it from the right bank
 
 const FOREST_CELL = 12; // grid spacing (world units) for tree candidates
 const FOREST_JITTER = 0.8; // fraction of cell used for jitter
-const SEINE_TREE_MARGIN = 9; // keep trees off the river, incl. the off-map tail
+// Marge de berge des arbres, mesurée depuis le *bord de l'eau* (pas depuis
+// l'axe) : 2 unités, soit exactement l'ancienne marge de 9 là où le lit fait 7
+// de demi-largeur, mais qui suit l'évasement autour des îles.
+const SEINE_TREE_BANK_MARGIN = 2;
 
 const RESCAN_MIN_INTERVAL = 0.06; // seconds, debounce for year-driven rescans
 
@@ -88,9 +132,47 @@ const MARSH_SPOTS = [
   { x: 205, z: 95, r: 24 },
 ];
 
+// --- Plan d'eau ------------------------------------------------------------
+//
+// Post-v2, LE correctif de fond. Le ruban de Seine était posé à y = -0,04, une
+// altitude *absolue*, en supposant que « 0 = niveau de l'eau ». Or la tâche
+// post-v1 « relief » a multiplié les collines par 2,6 : la montagne
+// Sainte-Geneviève culmine désormais assez haut pour que le sol *sous l'île de
+// la Cité* soit à +4,05, et tout le centre de Paris entre +0,4 et +4. Le ruban
+// d'eau était donc **enfoui sous le terrain** sur toute la traversée urbaine —
+// le « fleuve » visible à l'écran n'était plus que la teinte des sommets du sol
+// (le halo ci-dessus), sans arête, sans miroitement, sans île. Les bateaux
+// (posés eux aussi à y = 0,02) étaient enterrés avec lui.
+//
+// Le plan d'eau suit donc maintenant le terrain : chaque sommet du ruban est
+// posé `WATER_SURFACE_LIFT` au-dessus du sol *rendu* sous lui. C'est un décalque
+// (le même idiome que les chaussées de roads.js, à +0,035) plutôt qu'un plan
+// horizontal — cohérent avec une scène dont le relief est de toute façon exagéré
+// ×2,6, et robuste : le fleuve ne peut plus jamais être avalé par une colline.
+// 0,26 : mesuré, pas choisi au jugé. Le sol rendu est affine par morceaux
+// (deux triangles par maille de 15,6 × 17,2) tandis que le plan d'eau est
+// linéaire entre SES propres sommets ; l'écart résiduel dans une maille d'eau
+// culmine à ~0,14 sur les flancs de la montagne Sainte-Geneviève. 0,26 le
+// couvre avec le double de marge, houle du shader (0,03) comprise — voir le
+// script de mesure décrit dans le rapport post-v2.
+const WATER_SURFACE_LIFT = 0.26;
+// La lisière de berge : une bande claire posée juste en dehors du bord de l'eau,
+// 4 cm au-dessus du plan d'eau. C'est elle qui donne au fleuve un trait de côte
+// à toutes les époques et sous tous les éclairages — le maillage du sol, avec
+// ses mailles de 16 unités, en est incapable.
+const BANK_LIFT = 0.34;
+const BANK_WIDTH = 1.6;
+
 const COLOR_FOREST = new THREE.Color(0x2f6b34);
 const COLOR_URBAN = new THREE.Color(0xd8c6a0);
 const COLOR_WATER = new THREE.Color(0x3d6d82);
+// Berges et îles : une pierre chaude, distincte à la fois de l'eau (froide) et
+// du sol alentour (vert forêt aux époques anciennes, sable urbain ensuite).
+const COLOR_BANK = new THREE.Color(0xc9b791);
+const COLOR_BANK_EDGE = new THREE.Color(0xe4d8b4); // le liseré, plus clair
+const COLOR_ISLAND = new THREE.Color(0xcdbd96);
+const COLOR_ISLAND_SLOPE = new THREE.Color(0xa08e6c); // le talus, dans l'ombre
+const COLOR_ISLAND_WET = new THREE.Color(0x5c6b62); // la part immergée
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -139,30 +221,65 @@ export function groundUrbanBlend(urbanYearValue, year, transitionYears = TRANSIT
 
 /**
  * Whether a forest candidate should be a live tree at `year`: excludes
- * water (river course, incl. the off-map tail, via a spatial margin — not
- * a height threshold, see RIVER_WATER_CORE's comment for why) and any cell
- * already urbanized by `year`. Deliberately a hard threshold (unlike the
- * ground colour blend above) — the retreat itself should read crisply.
+ * water (river course, via a spatial margin — not a height threshold, see
+ * SHORELINE_INSET's comment for why) and any cell already urbanized by
+ * `year`. Deliberately a hard threshold (unlike the ground colour blend
+ * above) — the retreat itself should read crisply.
+ *
+ * `seineMargin` est la distance à l'axe en deçà de laquelle le candidat est
+ * dans l'eau : `buildForestCandidates` la calcule par candidat
+ * (`seineHalfWidthAt` + `SEINE_TREE_BANK_MARGIN`), de sorte qu'elle suive
+ * l'évasement du fleuve autour des îles. La valeur par défaut (9) est celle du
+ * lit standard (7 + 2), conservée pour les appels de test directs.
  * @param {number} distSeineValue - distance from the candidate to the Seine centerline.
  * @param {number} urbanYearValue - urbanYear(x, z); may be Infinity.
  * @param {number} year
  * @param {number} [seineMargin]
  * @returns {boolean}
  */
-export function isForestCandidate(distSeineValue, urbanYearValue, year, seineMargin = SEINE_TREE_MARGIN) {
+export function isForestCandidate(distSeineValue, urbanYearValue, year, seineMargin = 9) {
   if (distSeineValue < seineMargin) return false;
   return urbanYearValue > year;
 }
 
-/** Constant bump for Cité + Saint-Louis: real geographic islands, always raised. */
-function constantIslandDelta(x, z) {
-  const cite = ISLANDS.cite;
-  const stLouis = ISLANDS.saintLouis;
-  return (
-    ISLAND_BUMP_AMPLITUDE * ellipseFalloff(x, z, cite.x, cite.z, cite.rx * 1.3, cite.rz * 1.3) +
-    ISLAND_BUMP_AMPLITUDE *
-      ellipseFalloff(x, z, stLouis.x, stLouis.z, stLouis.rx * 1.3, stLouis.rz * 1.3)
-  );
+/** Rayon normalisé d'un point dans l'ellipse d'une île (0 = centre, 1 = rive). */
+function islandK(x, z, isl) {
+  const dx = (x - isl.x) / isl.rx;
+  const dz = (z - isl.z) / isl.rz;
+  return Math.sqrt(dx * dx + dz * dz);
+}
+
+/**
+ * Profil vertical d'une île, en fraction de `ISLAND_FREEBOARD` : 1 sur le
+ * plateau (k ≤ `ISLAND_PLATEAU_K`), descente `smoothstep` jusqu'à 0 au trait de
+ * rive (k = 1), 0 au-delà. Exportée pour les tests : c'est la fonction dont
+ * dépendent à la fois la surface rendue de l'île et l'assise de tout ce qui s'y
+ * pose (`groundHeightAt`), donc la garantie que rien n'y flotte ni ne s'y noie.
+ * @param {number} k rayon normalisé dans l'ellipse de l'île
+ * @returns {number} dans [0, 1]
+ */
+export function islandProfile(k) {
+  if (k <= ISLAND_PLATEAU_K) return 1;
+  if (k >= 1) return 0;
+  return smoothstep((1 - k) / (1 - ISLAND_PLATEAU_K));
+}
+
+/**
+ * Franc-bord de l'île (Cité ou Saint-Louis) en (x, z) : 0 partout ailleurs.
+ * S'ajoute au sol *rendu* dans `groundHeightAt`, et c'est exactement ce que
+ * `buildIslands` maille — une seule source de vérité pour « à quelle altitude
+ * est le dessus de l'île ».
+ * @param {number} x
+ * @param {number} z
+ * @returns {number}
+ */
+export function islandFreeboardAt(x, z) {
+  let best = 0;
+  for (const isl of [ISLANDS.cite, ISLANDS.saintLouis]) {
+    const p = islandProfile(islandK(x, z, isl));
+    if (p > best) best = p;
+  }
+  return best * ISLAND_FREEBOARD;
 }
 
 /**
@@ -200,6 +317,8 @@ const ground = {
   z: null, // Float32Array world z per vertex
   uYear: null, // Float32Array urbanYear(x,z) per vertex, cached (year-independent)
   variation: null, // Float32Array cosmetic noise per vertex, [-1, 1]
+  distSeine: null, // Float32Array distanceToSeine(x,z) per vertex, cached
+  riverHalfWidth: null, // Float32Array seineHalfWidthAt(x,z) per vertex, cached
   louviersIndices: null, // Int32Array of vertex indices near Louviers/channel
 };
 
@@ -210,6 +329,7 @@ const forestState = {
 };
 
 let marshMeshes = [];
+let islandMeshes = [];
 let waterMaterial = null;
 
 let lastScanYear = null;
@@ -233,6 +353,7 @@ function buildGround(ctx) {
   const uYear = new Float32Array(vertexCount);
   const variation = new Float32Array(vertexCount);
   const distSeine = new Float32Array(vertexCount);
+  const riverHalfWidth = new Float32Array(vertexCount);
   const louviersIdx = [];
 
   const louviers = ISLANDS.louviers;
@@ -252,8 +373,13 @@ function buildGround(ctx) {
       uYear[idx] = urbanYear(vx, vz);
       variation[idx] = hash01(ix, iz, 777) * 2 - 1;
       distSeine[idx] = distanceToSeine(vx, vz);
+      riverHalfWidth[idx] = seineHalfWidthAt(vx, vz);
 
-      const base = heightAt(vx, vz) + constantIslandDelta(vx, vz);
+      // Le franc-bord des îles n'est PLUS ajouté ici : à 15,6 × 17,2 unités par
+      // maille, ce maillage est trop grossier pour porter une île de 24 × 10 (il
+      // en faisait une tente informe). Les îles ont leur propre maillage radial,
+      // et `groundHeightAt` rajoute analytiquement leur franc-bord.
+      const base = heightAt(vx, vz);
       positions[idx * 3 + 0] = vx;
       positions[idx * 3 + 1] = base;
       positions[idx * 3 + 2] = vz;
@@ -306,27 +432,33 @@ function buildGround(ctx) {
   ground.uYear = uYear;
   ground.variation = variation;
   ground.distSeine = distSeine;
+  ground.riverHalfWidth = riverHalfWidth;
   ground.louviersIndices = Int32Array.from(louviersIdx);
 }
 
 /**
- * Altitude of the *rendered* ground surface at (x, z) — i.e. a bilinear
- * sample of the ground mesh's own vertices, not a fresh `heightAt()` call.
+ * Altitude de la nappe de terrain *hors îles*, échantillonnée sur le **plan du
+ * triangle réellement rasterisé**, et non par interpolation bilinéaire.
  *
- * The two differ: the mesh is a 256x256 grid over a 4000x4400 unit extent
- * (~15.6 units per quad), so features narrower than a quad — chiefly the
- * île de la Cité / Saint-Louis bumps, whose falloff spans ~16 units — are
- * rendered as a coarse tent well below their analytic height. Anything that
- * must *sit* on the ground (buildings, later monuments and crowds) has to
- * agree with what the eye sees, otherwise the Cité's buildings float a
- * metre above their own island. Callers must run after `init()`; before
- * that it degrades gracefully to the analytic height.
+ * Cette distinction n'est pas cosmétique. Le maillage est une grille 256×256 sur
+ * 4000×4400 unités (~15,6 × 17,2 par maille), et chaque maille est découpée en
+ * DEUX triangles le long de l'anti-diagonale (voir `indices.push(a, c, b, b, c,
+ * d)` dans `buildGround`). La surface rendue est donc affine par morceaux, pas
+ * bilinéaire : sur une maille gauche les deux surfaces s'écartent de la moitié du
+ * gauchissement, ce qui, sur les flancs de la montagne Sainte-Geneviève, atteint
+ * plusieurs dixièmes d'unité. Un plan d'eau posé 0,12 au-dessus de
+ * l'échantillon *bilinéaire* laissait donc ressortir des triangles de sol au
+ * milieu du fleuve — de grands losanges couleur berge, constatés sur la première
+ * capture post-correctif. Sur le plan du triangle, l'accord est exact.
+ *
+ * Les appelants doivent tourner après `init()` ; avant, la fonction se dégrade
+ * proprement en hauteur analytique.
  * @param {number} x
  * @param {number} z
  * @returns {number}
  */
-export function groundHeightAt(x, z) {
-  if (!ground.geometry) return heightAt(x, z) + constantIslandDelta(x, z);
+function groundBaseHeightAt(x, z) {
+  if (!ground.geometry) return heightAt(x, z);
   const positions = ground.geometry.attributes.position.array;
   const fx = clamp01((x - GROUND_X_MIN) / (GROUND_X_MAX - GROUND_X_MIN)) * GROUND_SEGMENTS_X;
   const fz = clamp01((z - GROUND_Z_MIN) / (GROUND_Z_MAX - GROUND_Z_MIN)) * GROUND_SEGMENTS_Z;
@@ -340,7 +472,40 @@ export function groundHeightAt(x, z) {
   const h10 = positions[(row0 + ix0 + 1) * 3 + 1];
   const h01 = positions[(row1 + ix0) * 3 + 1];
   const h11 = positions[(row1 + ix0 + 1) * 3 + 1];
-  return lerp(lerp(h00, h10, tx), lerp(h01, h11, tx), tz);
+  // Triangle bas-gauche (h00, h10, h01) puis triangle haut-droit (h10, h01, h11) :
+  // l'arête partagée va de (1,0) à (0,1), exactement le découpage de buildGround.
+  if (tx + tz <= 1) return h00 + tx * (h10 - h00) + tz * (h01 - h00);
+  return h11 + (1 - tx) * (h01 - h11) + (1 - tz) * (h10 - h11);
+}
+
+/**
+ * Altitude de la **surface au sol telle qu'elle est rendue** en (x, z) : la
+ * nappe de terrain, plus le franc-bord des îles de la Cité et de Saint-Louis.
+ * Source unique partagée par tout ce qui doit se poser au sol — bâtiments,
+ * monuments, foule, chaussées, rails, brasiers, vignettes de récit. C'est ce qui
+ * garantit que les huttes gauloises et Notre-Dame sont *sur* l'île, à sec, et
+ * non un mètre au-dessous de sa surface (voir `islandFreeboardAt`).
+ * @param {number} x
+ * @param {number} z
+ * @returns {number}
+ */
+export function groundHeightAt(x, z) {
+  return groundBaseHeightAt(x, z) + islandFreeboardAt(x, z);
+}
+
+/**
+ * Altitude du **plan d'eau** de la Seine en (x, z) : la nappe de terrain (donc
+ * SANS le franc-bord des îles — l'eau passe autour d'elles, pas dessus) plus
+ * `WATER_SURFACE_LIFT`. Exportée parce que trois autres couches en ont besoin
+ * pour ne pas s'enterrer : les bateaux de `life.js`, le tablier du pont au
+ * Change (`monuments.js`) et les chaussées de `roads.js` qui franchissent le
+ * fleuve. Voir le commentaire de `WATER_SURFACE_LIFT` pour le pourquoi.
+ * @param {number} x
+ * @param {number} z
+ * @returns {number}
+ */
+export function seineWaterHeightAt(x, z) {
+  return groundBaseHeightAt(x, z) + WATER_SURFACE_LIFT;
 }
 
 /** Patches just the Louviers/channel neighborhood's height for the given year. */
@@ -351,8 +516,7 @@ function patchLouviers(year) {
     const idx = louviersIndices[k];
     const vx = x[idx];
     const vz = z[idx];
-    const base = heightAt(vx, vz) + constantIslandDelta(vx, vz);
-    positions[idx * 3 + 1] = base + louviersDelta(vx, vz, year);
+    positions[idx * 3 + 1] = heightAt(vx, vz) + louviersDelta(vx, vz, year);
   }
   ground.geometry.attributes.position.needsUpdate = true;
   ground.geometry.computeVertexNormals();
@@ -362,7 +526,7 @@ function patchLouviers(year) {
 /** Recomputes every vertex color for the given year (cheap: pure scalar math). */
 function recolorGround(year) {
   const colors = ground.geometry.attributes.color.array;
-  const { x, z, uYear, variation, distSeine } = ground;
+  const { x, z, uYear, variation, distSeine, riverHalfWidth } = ground;
   const vertexCount = uYear.length;
 
   const fr = COLOR_FOREST.r, fg = COLOR_FOREST.g, fb = COLOR_FOREST.b;
@@ -381,10 +545,15 @@ function recolorGround(year) {
     let g = (fg + (ug - fg) * urbanT) * variationFactor;
     let b = (fb + (ub - fb) * urbanT) * variationFactor;
 
-    // Water tint is a spatial mask (distance to the Seine / island channel),
-    // not a height threshold — heightAt()'s base noise alone swings enough
-    // to false-positive as "water" on ordinary dry land otherwise.
-    const riverT = clamp01((distSeine[i] - RIVER_WATER_CORE) / RIVER_WATER_FADE);
+    // La teinte d'eau est un masque *spatial* (distance à l'axe de la Seine /
+    // au bras mort de Louviers), pas un seuil d'altitude — le bruit de base de
+    // heightAt() suffirait sinon à faire passer de la terre ferme pour de l'eau.
+    // Post-v2 : le masque est calé sur le bord de l'eau *local*
+    // (`riverHalfWidth`, élargi autour des îles) et ne dépasse plus que de
+    // SHORELINE_FADE - SHORELINE_INSET = 2 unités, au lieu de 9.
+    const riverT = clamp01(
+      (distSeine[i] - (riverHalfWidth[i] - SHORELINE_INSET)) / SHORELINE_FADE
+    );
     let waterFactor = 1 - smoothstep(riverT);
     if (louviersPresence > 0) {
       const channelFalloff = ellipseFalloff(x[i], z[i], louviers.x, channelZ, louviers.rx + 2, 2.5);
@@ -416,7 +585,9 @@ const WATER_VERTEX_SHADER = `
     vUv = uv;
     vFade = aFade;
     vec3 pos = position;
-    pos.y += sin(uTime * 0.6 + uv.y * 30.0) * 0.05 * aFade;
+    // Houle de 0,03 : le plan d'eau n'est qu'à WATER_SURFACE_LIFT (0,12) au-dessus
+    // du sol, une ondulation plus ample le ferait plonger dedans par intermittence.
+    pos.y += sin(uTime * 0.6 + uv.y * 30.0) * 0.03 * aFade;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
   }
 `;
@@ -430,68 +601,96 @@ const WATER_FRAGMENT_SHADER = `
   void main() {
     float s1 = sin(vUv.y * 50.0 - uTime * 1.4) * 0.5 + 0.5;
     float s2 = sin(vUv.y * 17.0 + vUv.x * 6.0 + uTime * 0.8) * 0.5 + 0.5;
-    float shimmer = mix(0.82, 1.28, s1 * 0.6 + s2 * 0.4);
+    float shimmer = mix(0.86, 1.24, s1 * 0.6 + s2 * 0.4);
     vec3 color = mix(uColorA, uColorB, vUv.x) * shimmer;
-    float alpha = 0.82 * vFade;
+    float alpha = 0.94 * vFade;
     if (alpha < 0.01) discard;
     gl_FragColor = vec4(color, alpha);
   }
 `;
 
-function buildRiverGeometry() {
+// Échantillonnage du fleuve : 700 sections le long de la courbe (~3,5 unités,
+// assez fin pour porter l'évasement autour des îles) et 5 colonnes en travers.
+//
+// Les colonnes intermédiaires ne sont pas décoratives : chaque sommet est posé
+// sur le sol *rendu* sous lui (`seineWaterHeightAt`), et deux colonnes seules
+// relieraient les deux rives par une corde droite de 24 unités près des îles —
+// le terrain, bombé par la montagne Sainte-Geneviève, ressortirait au milieu du
+// fleuve (erreur mesurée ~0,45 unité, soit 4× le décalage de surface). À 5
+// colonnes la corde tombe à 6 unités et l'erreur à ~0,03.
+const RIVER_SAMPLES = 1000;
+const RIVER_COLUMNS = 7;
+
+/**
+ * Parcourt la courbe de la Seine et appelle `visit` pour chaque section, avec le
+ * point de l'axe, la normale unitaire, la demi-largeur locale du lit et le
+ * facteur d'estompe de la boucle hors carte. Factorisé parce que trois
+ * maillages en ont besoin exactement au même endroit : le plan d'eau, les deux
+ * lisières de berge et (indirectement) le fondu de la queue hors carte.
+ * @param {(u:number, i:number, p:THREE.Vector3, perp:THREE.Vector3, hw:number, fade:number) => void} visit
+ */
+function walkRiver(visit) {
   const curvePoints = SEINE_POINTS.map((p) => new THREE.Vector3(p.x, 0, p.z));
   const curve = new THREE.CatmullRomCurve3(curvePoints, false, "catmullrom", 0.4);
-  const SAMPLES = 400;
-  const halfWidthBase = 7; // width ~14
   const uOnMap = (SEINE_ONMAP_COUNT - 1) / (SEINE_POINTS.length - 1);
-
-  const positions = new Float32Array(SAMPLES * 2 * 3);
-  const uvs = new Float32Array(SAMPLES * 2 * 2);
-  const fades = new Float32Array(SAMPLES * 2);
-  const indices = [];
-
   const tangent = new THREE.Vector3();
   const perp = new THREE.Vector3();
 
-  for (let i = 0; i < SAMPLES; i++) {
-    const u = i / (SAMPLES - 1);
+  for (let i = 0; i < RIVER_SAMPLES; i++) {
+    const u = i / (RIVER_SAMPLES - 1);
     const p = curve.getPointAt(u);
     curve.getTangentAt(u, tangent);
     perp.set(-tangent.z, 0, tangent.x);
     if (perp.lengthSq() < 1e-8) perp.set(1, 0, 0);
     else perp.normalize();
 
-    let widthFactor = 1;
-    let fadeFactor = 1;
+    // La demi-largeur suit `seineHalfWidthAt` : identique (7) partout, élargie
+    // (12) autour de la Cité et de Saint-Louis — c'est ce qui dégage un bras
+    // d'eau visible de chaque côté des deux îles.
+    let hw = seineHalfWidthAt(p.x, p.z);
+    let fade = 1;
     if (u > uOnMap) {
-      const t = (u - uOnMap) / (1 - uOnMap);
-      const s = smoothstep(t);
-      widthFactor = lerp(1, 0.3, s);
-      fadeFactor = 1 - s;
+      const s = smoothstep((u - uOnMap) / (1 - uOnMap));
+      hw *= lerp(1, 0.3, s);
+      fade = 1 - s;
     }
-    const hw = halfWidthBase * widthFactor;
-
-    const li = i * 2;
-    const ri = i * 2 + 1;
-    positions[li * 3 + 0] = p.x + perp.x * hw;
-    positions[li * 3 + 1] = -0.04;
-    positions[li * 3 + 2] = p.z + perp.z * hw;
-    positions[ri * 3 + 0] = p.x - perp.x * hw;
-    positions[ri * 3 + 1] = -0.04;
-    positions[ri * 3 + 2] = p.z - perp.z * hw;
-
-    uvs[li * 2 + 0] = 0;
-    uvs[li * 2 + 1] = u;
-    uvs[ri * 2 + 0] = 1;
-    uvs[ri * 2 + 1] = u;
-    fades[li] = fadeFactor;
-    fades[ri] = fadeFactor;
-
-    if (i < SAMPLES - 1) {
-      const a = li, bIdx = ri, c = li + 2, d = ri + 2;
-      indices.push(a, bIdx, c, bIdx, d, c);
-    }
+    visit(u, i, p, perp, hw, fade);
   }
+}
+
+/** Le plan d'eau : un décalque qui épouse le terrain, élargi autour des îles. */
+function buildRiverGeometry() {
+  const vertsPerSection = RIVER_COLUMNS;
+  const total = RIVER_SAMPLES * vertsPerSection;
+  const positions = new Float32Array(total * 3);
+  const uvs = new Float32Array(total * 2);
+  const fades = new Float32Array(total);
+  const indices = [];
+
+  walkRiver((u, i, p, perp, hw, fade) => {
+    for (let c = 0; c < vertsPerSection; c++) {
+      const v = c / (vertsPerSection - 1); // 0 = rive gauche du ruban, 1 = droite
+      const off = lerp(hw, -hw, v);
+      const px = p.x + perp.x * off;
+      const pz = p.z + perp.z * off;
+      const idx = i * vertsPerSection + c;
+      positions[idx * 3 + 0] = px;
+      positions[idx * 3 + 1] = seineWaterHeightAt(px, pz);
+      positions[idx * 3 + 2] = pz;
+      uvs[idx * 2 + 0] = v;
+      uvs[idx * 2 + 1] = u;
+      fades[idx] = fade;
+    }
+    if (i < RIVER_SAMPLES - 1) {
+      for (let c = 0; c < vertsPerSection - 1; c++) {
+        const a = i * vertsPerSection + c;
+        const b = a + 1;
+        const d = a + vertsPerSection;
+        const e = d + 1;
+        indices.push(a, b, d, b, e, d);
+      }
+    }
+  });
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
@@ -501,23 +700,185 @@ function buildRiverGeometry() {
   return geometry;
 }
 
+/**
+ * Les deux lisières de berge : une bande claire de `BANK_WIDTH` posée juste en
+ * dehors du bord de l'eau, sur chaque rive. C'est le trait de côte du fleuve —
+ * le maillage du sol (mailles de 16 unités) est incapable d'en porter un, et
+ * sans lui l'eau se fondait dans la berge à toutes les époques sombres.
+ * S'estompe avec le ruban sur la boucle hors carte.
+ */
+function buildRiverBanksGeometry() {
+  // 2 rives × 2 colonnes (bord de l'eau, bord extérieur) par section.
+  const perSection = 4;
+  const total = RIVER_SAMPLES * perSection;
+  const positions = new Float32Array(total * 3);
+  const colors = new Float32Array(total * 3);
+  const indices = [];
+
+  walkRiver((u, i, p, perp, hw, fade) => {
+    const width = BANK_WIDTH * fade;
+    for (let s = 0; s < 2; s++) {
+      const side = s === 0 ? 1 : -1;
+      for (let c = 0; c < 2; c++) {
+        const off = side * (hw + width * c);
+        const px = p.x + perp.x * off;
+        const pz = p.z + perp.z * off;
+        const idx = i * perSection + s * 2 + c;
+        positions[idx * 3 + 0] = px;
+        positions[idx * 3 + 1] = groundBaseHeightAt(px, pz) + BANK_LIFT;
+        positions[idx * 3 + 2] = pz;
+        // Liseré clair au contact de l'eau, pierre plus sourde vers la ville.
+        const col = c === 0 ? COLOR_BANK_EDGE : COLOR_BANK;
+        const varia = 1 + (hash01(i, s * 2 + c, 313) * 2 - 1) * 0.05;
+        colors[idx * 3 + 0] = col.r * varia;
+        colors[idx * 3 + 1] = col.g * varia;
+        colors[idx * 3 + 2] = col.b * varia;
+      }
+    }
+    if (i < RIVER_SAMPLES - 1) {
+      for (let s = 0; s < 2; s++) {
+        const a = i * perSection + s * 2;
+        const b = a + 1;
+        const d = a + perSection;
+        const e = d + 1;
+        indices.push(a, b, d, b, e, d);
+      }
+    }
+  });
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+/**
+ * Une île : un maillage radial (`ISLAND_RINGS` × `ISLAND_RADIAL_SEGMENTS`) dont
+ * la surface vaut **exactement** `groundHeightAt`, donc parfaitement d'accord
+ * avec tout ce qui s'y pose. Le dernier anneau plonge sous le plan d'eau pour
+ * qu'aucun interstice n'apparaisse au trait de rive.
+ * @param {{x:number,z:number,rx:number,rz:number}} isl
+ * @param {number} seed
+ */
+function buildIslandGeometry(isl, seed) {
+  const rings = ISLAND_RINGS;
+  const segs = ISLAND_RADIAL_SEGMENTS;
+  // Anneau 0 = un seul sommet central, puis `segs` sommets par anneau suivant.
+  const total = 1 + (rings.length - 1) * segs;
+  const positions = new Float32Array(total * 3);
+  const colors = new Float32Array(total * 3);
+  const indices = [];
+
+  const put = (idx, k, ang) => {
+    const px = isl.x + isl.rx * k * Math.cos(ang);
+    const pz = isl.z + isl.rz * k * Math.sin(ang);
+    let py = groundHeightAt(px, pz);
+    if (k > 1) py = groundBaseHeightAt(px, pz) - ISLAND_SKIRT_DROP;
+    positions[idx * 3 + 0] = px;
+    positions[idx * 3 + 1] = py;
+    positions[idx * 3 + 2] = pz;
+
+    let col = COLOR_ISLAND;
+    if (k >= 0.97) col = COLOR_ISLAND_WET;
+    else if (k > ISLAND_PLATEAU_K) col = COLOR_ISLAND_SLOPE;
+    const varia = 1 + (hash01(Math.round(k * 100), Math.round(ang * 40), seed) * 2 - 1) * 0.07;
+    colors[idx * 3 + 0] = col.r * varia;
+    colors[idx * 3 + 1] = col.g * varia;
+    colors[idx * 3 + 2] = col.b * varia;
+  };
+
+  put(0, 0, 0);
+  for (let r = 1; r < rings.length; r++) {
+    for (let a = 0; a < segs; a++) {
+      put(1 + (r - 1) * segs + a, rings[r], (a / segs) * Math.PI * 2);
+    }
+  }
+
+  // Éventail central
+  for (let a = 0; a < segs; a++) {
+    indices.push(0, 1 + a, 1 + ((a + 1) % segs));
+  }
+  // Couronnes
+  for (let r = 1; r < rings.length - 1; r++) {
+    const base = 1 + (r - 1) * segs;
+    const next = base + segs;
+    for (let a = 0; a < segs; a++) {
+      const a1 = (a + 1) % segs;
+      indices.push(base + a, next + a, base + a1);
+      indices.push(base + a1, next + a, next + a1);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function buildIslands(ctx) {
+  const material = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  const meshes = [];
+  const islands = [
+    { isl: ISLANDS.cite, seed: 4211 },
+    { isl: ISLANDS.saintLouis, seed: 8177 },
+  ];
+  for (const { isl, seed } of islands) {
+    const mesh = new THREE.Mesh(buildIslandGeometry(isl, seed), material);
+    mesh.frustumCulled = false;
+    // renderOrder 1 : après le sol (0), avant le plan d'eau (2). L'île est
+    // opaque et plus haute que l'eau : la profondeur suffirait, mais l'ordre
+    // explicite documente l'empilement sol → île → eau.
+    mesh.renderOrder = 1;
+    ctx.scene.add(mesh);
+    meshes.push(mesh);
+  }
+  return meshes;
+}
+
 function buildRiver(ctx) {
   const geometry = buildRiverGeometry();
   waterMaterial = new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
-      uColorA: { value: new THREE.Color(0x2c5a72) },
-      uColorB: { value: new THREE.Color(0x6fb3c9) },
+      // Post-v2 « contraste » : l'ancien couple (0x2c5a72, 0x6fb3c9) tombait
+      // dans le quasi-noir sous les signatures anciennes et nocturnes, sur un
+      // sol vert forêt lui aussi très sombre. Remontés en clarté ET en
+      // saturation ; le shader n'étant pas éclairé (voir weather.js : « la Seine
+      // ressort d'elle-même »), ces valeurs sont le contraste final.
+      uColorA: { value: new THREE.Color(0x35708f) },
+      uColorB: { value: new THREE.Color(0x7cc3db) },
     },
     vertexShader: WATER_VERTEX_SHADER,
     fragmentShader: WATER_FRAGMENT_SHADER,
     transparent: true,
     side: THREE.DoubleSide,
     depthWrite: false,
+    // Le plan d'eau n'est qu'à 0,12 au-dessus du sol : ce décalage de profondeur
+    // évite tout scintillement de z-fighting aux distances de caméra élevées.
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -4,
   });
   const mesh = new THREE.Mesh(geometry, waterMaterial);
+  mesh.frustumCulled = false;
   mesh.renderOrder = 2;
   ctx.scene.add(mesh);
+
+  const bankMaterial = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -4,
+  });
+  const banks = new THREE.Mesh(buildRiverBanksGeometry(), bankMaterial);
+  banks.frustumCulled = false;
+  banks.renderOrder = 1;
+  ctx.scene.add(banks);
 }
 
 // ============================================================================
@@ -539,7 +900,12 @@ function buildForestCandidates(quality) {
       const z = FOREST_Z_MIN + (gz + 0.5) * cell + jz;
 
       const distSeine = distanceToSeine(x, z);
-      if (distSeine < SEINE_TREE_MARGIN) continue;
+      // Post-v2 : la marge suit le bord de l'eau *local* (élargi autour des
+      // îles) au lieu d'une constante calée sur la demi-largeur de 7. Loin des
+      // îles, `seineHalfWidthAt` vaut 7 : `seineMargin` retombe donc exactement
+      // sur l'ancien SEINE_TREE_MARGIN de 9, et rien ne change hors de l'île.
+      const seineMargin = seineHalfWidthAt(x, z) + SEINE_TREE_BANK_MARGIN;
+      if (distSeine < seineMargin) continue;
       // Emprise d'un monument (tâche 10) : la forêt recule pour de bon devant
       // les arènes, le Panthéon ou la forteresse du Louvre — sans ce filtre, un
       // sapin poussait au milieu de la cour du donjon aux années où le quartier
@@ -553,7 +919,7 @@ function buildForestCandidates(quality) {
       const hueShift = hash01(gx, gz, 66) * 2 - 1;
       const y = heightAt(x, z);
 
-      candidates.push({ x, z, y, uYear, distSeine, archetype, rot, scale, hueShift });
+      candidates.push({ x, z, y, uYear, distSeine, seineMargin, archetype, rot, scale, hueShift });
     }
   }
   return candidates;
@@ -629,7 +995,7 @@ function rescanForest(year) {
 
   for (let i = 0; i < candidates.length; i++) {
     const c = candidates[i];
-    if (!isForestCandidate(c.distSeine, c.uYear, year)) continue;
+    if (!isForestCandidate(c.distSeine, c.uYear, year, c.seineMargin)) continue;
 
     _reuseQuat.setFromAxisAngle(UP, c.rot);
 
@@ -684,7 +1050,10 @@ function buildMarshes(ctx) {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.rotation.x = -Math.PI / 2;
     mesh.scale.set(spot.r, spot.r, 1);
-    mesh.position.set(spot.x, heightAt(spot.x, spot.z) + 0.05, spot.z);
+    // `groundHeightAt` et non `heightAt` : le maillage rendu s'écarte de la
+    // formule analytique de près d'une unité au centre de Paris (relief exagéré
+    // ×2,6), et les disques de marais restaient enterrés dessous.
+    mesh.position.set(spot.x, groundHeightAt(spot.x, spot.z) + 0.05, spot.z);
     mesh.renderOrder = 1;
     ctx.scene.add(mesh);
     return mesh;
@@ -760,6 +1129,14 @@ export function stats() {
   return {
     forestCandidates: forestState.candidates.length,
     treesActive: forestState.trunkMesh ? forestState.trunkMesh.count : 0,
+    // Post-v2 — vérification « l'île est une terre au milieu du fleuve » :
+    // nombre de maillages d'île construits, et franc-bord réellement rendu au
+    // centre de la Cité (le sol sous l'île, plus ISLAND_FREEBOARD) comparé au
+    // plan d'eau juste à côté. Lu par window.__paris.terrainStats().
+    islandMeshes: islandMeshes.length,
+    citeTopY: groundHeightAt(ISLANDS.cite.x, ISLANDS.cite.z),
+    citeWaterY: seineWaterHeightAt(ISLANDS.cite.x, ISLANDS.cite.z),
+    saintLouisTopY: groundHeightAt(ISLANDS.saintLouis.x, ISLANDS.saintLouis.z),
   };
 }
 
@@ -769,6 +1146,11 @@ export function stats() {
 
 export function init(ctx) {
   buildGround(ctx);
+  // Les îles avant le fleuve : `buildRiverGeometry` échantillonne le sol sous
+  // chacun de ses sommets, et l'ordre de construction ne change rien à ce
+  // calcul — mais l'ordre d'ajout à la scène documente l'empilement voulu
+  // (sol → île → eau, cf. `renderOrder`).
+  islandMeshes = buildIslands(ctx);
   buildRiver(ctx);
 
   forestState.candidates = buildForestCandidates(ctx.quality);

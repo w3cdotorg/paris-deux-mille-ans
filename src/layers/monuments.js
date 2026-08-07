@@ -11,7 +11,7 @@
  * ============================================================================
  * Registre (`MONUMENTS`, exporté) : un objet par *site*, avec
  *
- *   { id, label, phrase, x, z, rotY?, baseY?, states: [...] }
+ *   { id, label, phrase, x, z, rotY?, baseY?, seatOnWater?, states: [...] }
  *
  * `label`/`phrase` (français, une phrase, lisible par un enfant de 4-5 ans)
  * sont stockés ici pour les interactions au clic de la tâche 15.
@@ -46,9 +46,9 @@
  */
 
 import * as THREE from "three";
-import { LANDMARKS, MONUMENT_FOOTPRINTS } from "../geography.js";
+import { LANDMARKS, MONUMENT_FOOTPRINTS, isOverSeineWater } from "../geography.js";
 import { lifecycle, easeOutBack, presenceAtDeath } from "../timeEngine.js";
-import { groundHeightAt } from "./terrain.js";
+import { groundHeightAt, seineWaterHeightAt } from "./terrain.js";
 import { MODEL_BUILDERS } from "../monumentModels.js";
 
 // ============================================================================
@@ -262,7 +262,10 @@ export const MONUMENTS = [
     // Le pont franchit la Seine en biais : l'axe local +x suit la normale
     // « vers le nord » du fleuve, (0,351 ; -0,937) — voir LANDMARKS.pontAuChange.
     rotY: Math.atan2(0.937, 0.351),
-    baseY: 0, // niveau de l'eau, pas le lit du fleuve
+    // Le tablier se pose sur le **plan d'eau**, pas sur le lit du fleuve ni sur
+    // le sol des berges (post-v2 : ce plan d'eau suit désormais le terrain, il
+    // n'est plus à l'altitude absolue 0 — voir `seineWaterHeightAt`).
+    seatOnWater: true,
     states: [
       {
         id: "pont",
@@ -740,15 +743,26 @@ function siteBaseY(m) {
   const footprint = MONUMENT_FOOTPRINTS.find((f) => f.id === m.id);
   const r = (footprint ? footprint.r : 4) * 0.7;
   let sum = groundHeightAt(m.x, m.z);
+  let n = 1;
   for (const [dx, dz] of [
     [-1, -1],
     [-1, 1],
     [1, -1],
     [1, 1],
   ]) {
-    sum += groundHeightAt(m.x + dx * r, m.z + dz * r);
+    const px = m.x + dx * r;
+    const pz = m.z + dz * r;
+    // Post-v2 : on n'échantillonne jamais le lit du fleuve. Sur l'île de la
+    // Cité — devenue une vraie terre émergée de 1,7 unité au-dessus de l'eau —
+    // les quatre coins de l'emprise de Notre-Dame tombent tous les quatre dans
+    // la Seine (l'île ne fait que 10 unités de large, l'emprise 10 de côté) :
+    // les moyenner enfonçait la cathédrale de 1,36 unité, donc jusqu'au niveau
+    // de l'eau. Ignorer ces coins-là remet le monument sur le plateau de l'île.
+    if (isOverSeineWater(px, pz)) continue;
+    sum += groundHeightAt(px, pz);
+    n++;
   }
-  return sum / 5;
+  return sum / n;
 }
 
 export function init(ctx) {
@@ -760,7 +774,7 @@ export function init(ctx) {
       const build = MODEL_BUILDERS[st.model];
       if (!build) throw new Error(`monuments: modèle inconnu « ${st.model} » (site ${m.id})`);
       const group = build();
-      const baseY = m.baseY ?? siteBaseY(m);
+      const baseY = m.seatOnWater ? seineWaterHeightAt(m.x, m.z) : m.baseY ?? siteBaseY(m);
       group.position.set(m.x, baseY, m.z);
       if (m.rotY) group.rotation.y = m.rotY;
       group.visible = false;

@@ -938,15 +938,43 @@ export function buildForum() {
 // PONT AU CHANGE + LES MOULINS
 // ============================================================================
 
-const BRIDGE_LEN = 8.4;
+// Post-v2 : le tablier passe de 8,4 à 15,6 unités. Le bras nord de la Seine
+// s'élargit désormais à 12 unités de demi-largeur devant l'île (voir
+// SEINE_ISLAND_HALF_WIDTH dans geography.js) pour dégager un vrai bras d'eau de
+// chaque côté de la Cité : mesurée le long de l'axe du pont, la travée à
+// franchir vaut 12,85 unités, et l'ancien tablier de 8,4 s'arrêtait au milieu du
+// fleuve. 15,6 = 12,85 de travée + 1,4 d'appui dans l'île + 1,8 sur la rive
+// droite. À l'échelle, 156 m pour un bras de 120 m : le pont au Change réel fait
+// 103 m sur un grand bras d'environ 100 m — la proportion est conservée.
+const BRIDGE_LEN = 15.6;
 const BRIDGE_W = 1.9;
-// Tablier haut de 1,4 (14 m au-dessus du niveau de l'eau, contre ~10 m en vrai).
-// Volontairement exagéré : la bosse gaussienne de l'île (terrain.js,
-// ISLAND_BUMP_AMPLITUDE) remonte le bras nord de la Seine quasiment au niveau de
-// l'eau, donc un tablier bas s'y écrasait — arches invisibles, roues à moitié
-// enterrées, l'ensemble lisant comme une rue bordée de maisons (constat des
-// captures task10-pont-*). Surélevé, le pont retrouve sa silhouette d'arches.
+// Pas des travées : 6 travées de 2,6 sur les 15,6 du tablier. Les piles tombent
+// sur les multiples pairs du demi-pas, les arches sur les impairs — exactement le
+// motif de l'ancien pont (pas 2,8 : piles à -2,8/0/2,8, arches à ±1,4 et ±4,2),
+// dérivé ici de la longueur pour que les deux restent d'accord.
+const BRIDGE_BAY = 2.6;
+// Tablier haut de 1,4 (14 m au-dessus du plan d'eau, contre ~10 m en vrai).
+// Volontairement exagéré : à cette hauteur le tablier arrive de niveau avec le
+// plateau de l'île (franc-bord 1,7, voir ISLAND_FREEBOARD dans terrain.js), donc
+// la rue passe de plain-pied de l'île à la rive droite, et les arches comme les
+// roues à aubes gardent leur pleine hauteur au-dessus de l'eau.
 const DECK_TOP = 1.4;
+
+/** Abscisses des piles : les multiples pairs du demi-pas, extrémités exclues. */
+function bridgePierXs() {
+  const half = BRIDGE_LEN / 2;
+  const out = [];
+  for (let x = -half + BRIDGE_BAY; x < half - 0.01; x += BRIDGE_BAY) out.push(Math.round(x * 100) / 100);
+  return out;
+}
+
+/** Abscisses des arches : à mi-chemin entre deux piles (et au-delà des extrêmes). */
+function bridgeArchXs() {
+  const half = BRIDGE_LEN / 2;
+  const out = [];
+  for (let x = -half + BRIDGE_BAY / 2; x < half; x += BRIDGE_BAY) out.push(Math.round(x * 100) / 100);
+  return out;
+}
 
 /** Le pont de pierre nu — il reste après 1786. */
 export function buildPont() {
@@ -954,17 +982,17 @@ export function buildPont() {
   // tablier
   box(g, "stone", { x: 0, z: 0, y0: DECK_TOP - 0.3, w: BRIDGE_LEN, h: 0.3, d: BRIDGE_W });
   // piles + arches
-  for (const x of [-2.8, 0, 2.8]) {
+  for (const x of bridgePierXs()) {
     box(g, "stoneShadow", { x, z: 0, y0: -0.5, w: 0.85, h: 1.6, d: BRIDGE_W + 0.3 });
   }
   // Arches : voûtes en berceau d'axe *travers* du pont (rotY = π/2), donc
   // `w` est la portée mesurée le long du tablier et `d` la largeur franchie.
-  for (const x of [-1.4, 1.4, 4.2, -4.2]) {
+  for (const x of bridgeArchXs()) {
     vault(g, "stoneShadow", {
       x,
       z: 0,
       y0: 0.25,
-      w: 2.0,
+      w: BRIDGE_BAY - 0.8,
       h: 0.85,
       d: BRIDGE_W + 0.1,
       rotY: Math.PI / 2,
@@ -985,8 +1013,11 @@ export function buildPontMoulins() {
   const g = newModel("pontMoulins");
   // deux rangées de maisons étroites, faîtage perpendiculaire au pont
   const houseColors = ["plaster", "plasterPink", "plaster", "plasterPink", "plaster"];
-  for (let i = 0; i < 5; i++) {
-    const x = -3.2 + i * 1.6;
+  // 9 maisons au lieu de 5 : le tablier est passé de 8,4 à 15,6 unités, et le
+  // pont au Change réel était couvert de maisons sur toute sa longueur.
+  const HOUSE_COUNT = 9;
+  for (let i = 0; i < HOUSE_COUNT; i++) {
+    const x = -((HOUSE_COUNT - 1) / 2) * 1.6 + i * 1.6;
     for (const sz of [-1, 1]) {
       const key = houseColors[(i + (sz > 0 ? 1 : 0)) % houseColors.length];
       const z = sz * 0.66;
@@ -1004,9 +1035,10 @@ export function buildPontMoulins() {
       box(g, "wood", { x, z: z + sz * 0.28, y0: DECK_TOP + 0.42, w: 1.2, h: 0.07, d: 0.05 });
     }
   }
-  // 4 roues à aubes, côté amont
+  // 4 roues à aubes, côté amont — réparties sur la moitié du tablier qui surplombe
+  // vraiment le courant (les roues du pont au Change étaient adossées aux piles).
   for (let i = 0; i < 4; i++) {
-    const x = -2.7 + i * 1.8;
+    const x = -4.5 + i * 3.0;
     const wheel = spinner(g, {
       x,
       // 0,78 : moitié basse de la roue dans le courant, moyeu juste sous le

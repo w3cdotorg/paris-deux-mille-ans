@@ -32,7 +32,7 @@ import {
   stats,
 } from "../src/layers/weather.js";
 import { MOMENTS } from "../src/timeline.js";
-import { urbanYear, distanceToSeine } from "../src/geography.js";
+import { urbanYear, isOverSeineWater, seineHalfWidthAt, distanceToSeine } from "../src/geography.js";
 import * as terrain from "../src/layers/terrain.js";
 
 // ============================================================================
@@ -426,7 +426,14 @@ test("generateWindowSlots : toute fenêtre est sur du bâti de son époque, hors
     assert.ok(slots.length > 0, `aucun emplacement en ${year}`);
     for (const s of slots) {
       assert.ok(urbanYear(s.x, s.z) <= year, `cellule non urbanisée en ${year}`);
-      assert.ok(distanceToSeine(s.x, s.z) >= 9, "fenêtre posée sur la Seine");
+      // Post-v2 : l'invariant est « hors de l'eau », bord de l'eau compris
+      // (`isOverSeineWater`), et non « à plus de 9 unités de l'axe » — le lit
+      // s'élargit à 12 devant les îles, et la terre ferme de la Cité est dans le
+      // lit tout en étant sèche (une fenêtre y est parfaitement légitime).
+      assert.ok(
+        !isOverSeineWater(s.x, s.z, 2),
+        `fenêtre posée sur la Seine : (${s.x.toFixed(1)}, ${s.z.toFixed(1)}), bord de l'eau à ${seineHalfWidthAt(s.x, s.z).toFixed(1)}u, point à ${distanceToSeine(s.x, s.z).toFixed(1)}u`
+      );
       assert.ok(s.rank >= 0 && s.rank < 1);
     }
   }
