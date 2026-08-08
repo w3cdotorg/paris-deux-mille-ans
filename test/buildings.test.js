@@ -647,42 +647,32 @@ test("fabricHistoryAt: at YEAR_MIN, the origin (gaulois) stage is fully present 
   assert.ok(anyFullyPresent);
 });
 
-test("island cells: at YEAR_MIN, real île de la Cité cells produce N > 0 fully-present (presence=1) gaulois building instances (Critical 1)", () => {
-  // Mirrors `generate()`'s own pipeline (grid -> isBuildableCell -> placeCell
-  // -> fabricHistoryAt -> expandHistory's died-of-next-stage rule) using only
-  // the exported pure functions, so this exercises the real fix end-to-end
-  // without needing a THREE scene/ctx.
+test("island tissue: at YEAR_MIN, the île de la Cité carries N > 0 fully-present (presence=1) gaulois building instances (Critical 1)", () => {
+  // Mirrors `generate()`'s own island pipeline (placeIslandTissue ->
+  // fabricHistoryAt(fullRebuild) -> expandHistory's died-of-next-stage rule)
+  // using only the exported pure functions, so this exercises the real fix
+  // end-to-end without needing a THREE scene/ctx. Les îles sont hors grille
+  // depuis le correctif « bâti au sec » : isBuildableCell les exclut.
   const PERI = RINGS.peripherique;
-  const insideRing = insideEllipse(0, 0, PERI.cx, PERI.cz, PERI.rx, PERI.rz);
+  const isl = ISLANDS.cite;
+  const insideRing = insideEllipse(isl.x, isl.z, PERI.cx, PERI.cz, PERI.rx, PERI.rz);
   assert.ok(insideRing, "the Cité should be inside the périphérique");
 
-  let fullyPresentCount = 0;
-  const ixSpan = Math.ceil((ISLANDS.cite.rx + CELL) / CELL) + 1;
-  const izSpan = Math.ceil((ISLANDS.cite.rz + CELL) / CELL) + 1;
-  const centerIx = Math.floor(ISLANDS.cite.x / CELL);
-  const centerIz = Math.floor(ISLANDS.cite.z / CELL);
+  const uYear = urbanYear(isl.x, isl.z);
+  assert.equal(uYear, YEAR_MIN, "the Cité is the timeline's founding origin");
+  const density = densityAt(isl.x, isl.z);
 
-  for (let ix = centerIx - ixSpan; ix <= centerIx + ixSpan; ix++) {
-    for (let iz = centerIz - izSpan; iz <= centerIz + izSpan; iz++) {
-      const cx = cellCenterX(ix);
-      const cz = cellCenterZ(iz);
-      const uYear = urbanYear(cx, cz);
-      if (uYear !== YEAR_MIN) continue; // not an île de la Cité cell
-      if (!isBuildableCell(cx, cz, uYear, YEAR_MAX)) continue;
-      const density = densityAt(cx, cz);
-      const placed = placeCell(ix, iz, uYear, YEAR_MAX, density, insideRing);
-      for (const p of placed) {
-        const history = fabricHistoryAt(uYear, density, insideRing, p.seed);
-        const died = history.length > 1 ? history[1].born : Infinity;
-        const presence = lifecycle(YEAR_MIN, {
-          born: history[0].born,
-          buildYears: BUILD_YEARS,
-          died,
-          razeYears: RAZE_YEARS,
-        }).presence;
-        if (history[0].family === "gaulois" && presence === 1) fullyPresentCount++;
-      }
-    }
+  let fullyPresentCount = 0;
+  for (const p of placeIslandTissue(isl, 0, YEAR_MAX, uYear, density, insideRing)) {
+    const history = fabricHistoryAt(uYear, density, insideRing, p.seed, YEAR_MAX, true);
+    const died = history.length > 1 ? history[1].born : Infinity;
+    const presence = lifecycle(YEAR_MIN, {
+      born: history[0].born,
+      buildYears: BUILD_YEARS,
+      died,
+      razeYears: RAZE_YEARS,
+    }).presence;
+    if (history[0].family === "gaulois" && presence === 1) fullyPresentCount++;
   }
 
   assert.ok(
@@ -712,19 +702,18 @@ test("debugCounts ground truth: easeOutBack(lifecycle(...).presence) is 0 exactl
 });
 
 // ============================================================================
-// placeCell — le bâti reste au sec (régression post-remodelage Seine) : les
-// cellules sont validées par leur *centre* (isBuildableCell), mais les
-// bâtiments s'étalent jusqu'à ~4 unités du centre. Sur l'île de la Cité
-// (ellipse 24×10, à peine plus grande qu'une cellule de 8), 8 huttes sur 10
-// de -250 tombaient dans le lit creusé du fleuve ; sur les berges, le lit
-// élargi à 12 de demi-largeur autour des îles noyait des maisons dont la
-// cellule restait à bonne distance. Invariant : chaque bâtiment posé est au
-// sec — sur île, sol rendu au-dessus du plan d'eau ; hors île, jamais dans
-// l'emprise de l'eau.
+// Le bâti reste au sec (régression post-remodelage Seine) : les cellules sont
+// validées par leur *centre* (isBuildableCell), mais les bâtiments s'étalent
+// jusqu'à ~4 unités du centre — dans le lit élargi à 12 de demi-largeur
+// autour des îles, des maisons de berge se posaient sur l'eau. Les îles
+// elles-mêmes sont hors grille : leur tissu vit dans placeIslandTissue
+// (couronne équidistante sur le plateau sec + rangée axiale, espacement
+// garanti, reconstruction intégrale à chaque époque).
 // ============================================================================
 
 import { groundHeightAt, seineWaterHeightAt } from "../src/layers/terrain.js";
 import { isOverSeineWater, isOnPermanentIsland } from "../src/geography.js";
+import { placeIslandTissue } from "../src/layers/buildings.js";
 
 /** Tous les bâtiments posés par placeCell dans la fenêtre de cellules donnée. */
 function placedInWindow(year, ixMin, ixMax, izMin, izMax) {
@@ -741,15 +730,39 @@ function placedInWindow(year, ixMin, ixMax, izMin, izMax) {
   return out;
 }
 
-test("placeCell: les huttes de -250 sont toutes au sec sur l'île de la Cité", () => {
-  const placed = placedInWindow(-250, -4, 4, -4, 4);
-  assert.ok(placed.length >= 4, `l'île doit porter un campement, pas ${placed.length} hutte(s)`);
-  for (const b of placed) {
-    const clearance = groundHeightAt(b.x, b.z) - seineWaterHeightAt(b.x, b.z);
+/** Le tissu des deux îles permanentes à `year`. */
+function islandTissueAt(year) {
+  return [ISLANDS.cite, ISLANDS.saintLouis].flatMap((isl, i) =>
+    placeIslandTissue(isl, i, year, urbanYear(isl.x, isl.z), densityAt(isl.x, isl.z), true)
+  );
+}
+
+test("placeCell: aucun bâtiment de berge d'aucune époque n'est posé sur l'eau", () => {
+  for (const year of [-250, 100, 1300, 1650, 2026]) {
+    for (const b of placedInWindow(year, -12, 12, -12, 12)) {
+      assert.ok(
+        !isOnPermanentIsland(b.x, b.z),
+        `an ${year} : placeCell a posé (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) sur une île — c'est le rôle de placeIslandTissue`
+      );
+      assert.ok(
+        !isOverSeineWater(b.x, b.z, 0),
+        `an ${year} : bâtiment (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) posé sur l'eau`
+      );
+    }
+  }
+});
+
+test("placeIslandTissue: le campement de -250 est fourni, sur l'île, au sec", () => {
+  const isl = ISLANDS.cite;
+  const camp = placeIslandTissue(isl, 0, -250, urbanYear(isl.x, isl.z), densityAt(isl.x, isl.z), true);
+  assert.ok(camp.length >= 4, `l'île doit porter un campement, pas ${camp.length} hutte(s)`);
+  for (const b of camp) {
+    assert.equal(b.family, "gaulois");
     assert.ok(
       isOnPermanentIsland(b.x, b.z),
-      `hutte (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) posée hors de l'île, dans le fleuve`
+      `hutte (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) posée hors de l'île`
     );
+    const clearance = groundHeightAt(b.x, b.z) - seineWaterHeightAt(b.x, b.z);
     assert.ok(
       clearance > 0.14,
       `hutte (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) sous le plan d'eau (dégagement ${clearance.toFixed(2)})`
@@ -757,21 +770,39 @@ test("placeCell: les huttes de -250 sont toutes au sec sur l'île de la Cité", 
   }
 });
 
-test("placeCell: aucun bâtiment d'aucune époque n'est posé sur l'eau autour des îles", () => {
-  for (const year of [-250, 100, 1300, 1650, 2026]) {
-    for (const b of placedInWindow(year, -12, 12, -12, 12)) {
-      if (isOnPermanentIsland(b.x, b.z)) {
-        const clearance = groundHeightAt(b.x, b.z) - seineWaterHeightAt(b.x, b.z);
+test("placeIslandTissue: espacement garanti — aucune paire de pads à moins de 1,8 unité", () => {
+  for (const year of [-250, 200, 1300, 2026]) {
+    const tissue = islandTissueAt(year);
+    for (let i = 0; i < tissue.length; i++) {
+      for (let j = i + 1; j < tissue.length; j++) {
+        const d = Math.hypot(tissue[i].x - tissue[j].x, tissue[i].z - tissue[j].z);
         assert.ok(
-          clearance > 0.14,
-          `an ${year} : bâtiment d'île (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) sous le plan d'eau (dégagement ${clearance.toFixed(2)})`
-        );
-      } else {
-        assert.ok(
-          !isOverSeineWater(b.x, b.z, 0),
-          `an ${year} : bâtiment (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) posé sur l'eau`
+          d >= 1.8,
+          `an ${year} : pads (${tissue[i].x.toFixed(1)}, ${tissue[i].z.toFixed(1)}) et (${tissue[j].x.toFixed(1)}, ${tissue[j].z.toFixed(1)}) à ${d.toFixed(2)} l'un de l'autre`
         );
       }
     }
+  }
+});
+
+test("placeIslandTissue: reconstruction intégrale — plus une seule hutte gauloise en 200", () => {
+  const isl = ISLANDS.cite;
+  const tissue = placeIslandTissue(isl, 0, 200, urbanYear(isl.x, isl.z), densityAt(isl.x, isl.z), true);
+  assert.ok(tissue.length >= 4);
+  for (const b of tissue) {
+    assert.equal(
+      b.family,
+      "romain",
+      `en 200, le pad (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) porte encore du ${b.family}`
+    );
+    // Le crossgrow hutte→maison est fini avant 200 : la reconstruction romaine
+    // démarre au plus tard à 100 + spread 40, et RAZE_YEARS = 8.
+    assert.ok(b.born <= 140, `reconstruction romaine trop tardive : ${b.born}`);
+  }
+});
+
+test("placeIslandTissue: jamais de « moderne » sur les îles, même en 2026", () => {
+  for (const b of islandTissueAt(2026)) {
+    assert.notEqual(b.family, "moderne", `tour/barre moderne sur une île en (${b.x.toFixed(1)}, ${b.z.toFixed(1)})`);
   }
 });

@@ -45,7 +45,8 @@ import * as THREE from "three";
 import {
   urbanYear,
   isOverSeineWater,
-  permanentIslandAt,
+  isOnPermanentIsland,
+  ISLANDS,
   ISLAND_PLATEAU_K,
   RINGS,
   LANDMARKS,
@@ -376,11 +377,12 @@ export function familyForUrbanYear(uYear) {
  * @param {number} density - densityAt du centre de cellule, dans [0,1]
  * @param {boolean} insideRing - dans l'enceinte de Thiers (le périphérique)
  * @param {number} seed - graine du bâtiment (voir seedOf)
+ * @param {boolean} [fullRebuild] - voir `fabricHistoryAt`
  * @returns {{family: string, born: number}} famille rendue et année de
  *   construction du bâti courant (utile à la tâche 8 pour l'animation).
  */
-export function fabricAt(uYear, year, density, insideRing, seed) {
-  const history = fabricHistoryAt(uYear, density, insideRing, seed, year);
+export function fabricAt(uYear, year, density, insideRing, seed, fullRebuild = false) {
+  const history = fabricHistoryAt(uYear, density, insideRing, seed, year, fullRebuild);
   const last = history[history.length - 1];
   return { family: last.family, born: last.born };
 }
@@ -416,14 +418,23 @@ export function originJitter(seed) {
  * *crossgrow* (l'ancien rétrécit pendant que le nouveau pousse, la somme des
  * deux présences valant exactement 1 tout au long de la transition) plutôt
  * qu'un crossfade ou qu'un trou.
+ * `fullRebuild` (tissu insulaire, voir `placeIslandTissue`) : chaque époque
+ * reconstruit à coup sûr au lieu de tirer contre sa part. Sur la grille, les
+ * 8-12% de parcelles qui échappent à chaque vague font la texture du tissu
+ * (un Marais au milieu du zinc) ; sur une île d'une dizaine de parcelles en
+ * scène ouverte, le même mécanisme laissait des huttes gauloises plantées
+ * entre les maisons romaines pendant des siècles. Exception : « moderne »
+ * garde son tirage (rarissime intra-muros) — pas de barre de verre à
+ * Notre-Dame.
  * @param {number} uYear - urbanYear de la cellule
  * @param {number} density - densityAt du centre de cellule, dans [0,1]
  * @param {boolean} insideRing - dans l'enceinte de Thiers (le périphérique)
  * @param {number} seed - graine du bâtiment (voir seedOf)
  * @param {number} [endYear] - n'inclut aucune reconstruction postérieure
+ * @param {boolean} [fullRebuild] - toute époque (sauf moderne) reconstruit
  * @returns {Array<{family: string, born: number}>} au moins une entrée
  */
-export function fabricHistoryAt(uYear, density, insideRing, seed, endYear = YEAR_MAX) {
+export function fabricHistoryAt(uYear, density, insideRing, seed, endYear = YEAR_MAX, fullRebuild = false) {
   const index0 = EPOCH_INDEX[familyForUrbanYear(uYear)];
   let born0 = uYear + originJitter(seed); // originJitter >= 0, so born0 >= uYear always
   // Correctif de revue (Critical 1, tâche 8) : à uYear === YEAR_MIN (l'île de
@@ -460,7 +471,11 @@ export function fabricHistoryAt(uYear, density, insideRing, seed, endYear = YEAR
     // re-clad haussmannien hors enceinte, en miroir : quelques opérations
     // isolées restent possibles, mais plus l'écrasante majorité.
     if (epoch.family === "moderne" && insideRing) share *= 0.06;
-    if (roll(seed, 1300 + k * 11) < share) {
+    const rebuilds =
+      fullRebuild && epoch.family !== "moderne"
+        ? true
+        : roll(seed, 1300 + k * 11) < share;
+    if (rebuilds) {
       history.push({ family: epoch.family, born: gate });
     }
   }
@@ -493,15 +508,15 @@ export function cellBuildingCount(ix, iz, density) {
 }
 
 /**
- * Cellule constructible ? Exclut l'eau, les grands espaces ouverts, les
- * dégagements de monuments, et tout ce qui n'est pas encore urbanisé.
+ * Cellule constructible ? Exclut l'eau, les îles permanentes, les grands
+ * espaces ouverts, les dégagements de monuments, et tout ce qui n'est pas
+ * encore urbanisé.
  *
- * L'exemption des deux îles permanentes (Cité, Saint-Louis) vit désormais dans
- * `isOverSeineWater` (geography.js) : elles sont, par nature, entièrement à
- * l'intérieur du lit du fleuve, et sans exemption la marge de berge les
- * viderait de tout bâti — donc, entre autres, des huttes gauloises de -250,
- * les premières constructions de toute la frise. Louviers en reste exclue
- * (bras mort, disparition en 1843) : un cas à part, pas un confort de berge.
+ * Les deux îles permanentes (Cité, Saint-Louis) sont hors grille : plus
+ * petites que 2×2 cellules, l'îlot périmétrique y déborde structurellement
+ * dans le lit du fleuve. Leur tissu est posé par `placeIslandTissue`, qui
+ * garantit l'espacement et l'assise sur le plateau sec. Louviers reste
+ * simplement de l'eau (bras mort, disparition en 1843) : un cas à part.
  * @param {number} x - centre de cellule
  * @param {number} z
  * @param {number} uYear - urbanYear(x, z)
@@ -510,6 +525,7 @@ export function cellBuildingCount(ix, iz, density) {
  */
 export function isBuildableCell(x, z, uYear, year) {
   if (!(uYear <= year)) return false; // couvre aussi uYear === Infinity
+  if (isOnPermanentIsland(x, z)) return false; // tissu dédié : placeIslandTissue
   if (isOverSeineWater(x, z, WATER_BANK_MARGIN)) return false;
   for (const space of OPEN_SPACES) {
     if (insideEllipse(x, z, space.x, space.z, space.rx, space.rz)) return false;
@@ -552,9 +568,6 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
   const cellRot = streetOrientation(ix, iz);
   const cosR = Math.cos(cellRot);
   const sinR = Math.sin(cellRot);
-  // Cellule d'île ? Le tissu insulaire est posé en dispersion sur le plateau
-  // sec, pas en îlot périmétrique — voir la branche `island` dans la boucle.
-  const island = permanentIslandAt(cx, cz);
   const out = [];
 
   // Empaquetage contigu par arête (review Critical 1a) : chaque arête a son
@@ -618,50 +631,6 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
     // interstices sans toucher le nombre d'instances (donc sans coût de perf).
     const nominalScale = 1.0 + roll(seed, 31) * (family === "haussmann" ? 0.2 : 0.32);
     const alongNominal = pickedSpec.w * nominalScale;
-
-    // Cellule d'île : pas d'îlot périmétrique. isBuildableCell ne valide que
-    // le *centre* de la cellule, or les façades s'étalent jusqu'à ~4 unités —
-    // sur une île à peine plus grande qu'une cellule (Cité : 24×10), la pose
-    // en périmètre déposait 8 huttes gauloises sur 10 dans le lit creusé du
-    // fleuve (régression constatée après le remodelage de la Seine ; idem pour
-    // les maisons de la Cité aux époques suivantes). À la place : un tissu
-    // blotti, dispersé par seed sur la couronne externe du plateau *sec*
-    // (kr ≤ ISLAND_PLATEAU_K — au-delà, le talus plonge sous le plan d'eau).
-    // Les emprises de monuments continuent de creuser le parvis : c'est le
-    // duo documenté dans la note MONUMENT_FOOTPRINTS de geography.js — « la
-    // cathédrale garde son parvis net *et* l'île garde ses maisons blotties
-    // autour ». Les poses qui tombent dans une emprise sont simplement
-    // abandonnées : la couronne libre (est/ouest du parvis) en absorbe ~8 sur
-    // la Cité, la capacité réelle de ses arcs.
-    if (island) {
-      // Angle stratifié par slot (pas un tirage uniforme) : un hasard pur
-      // agglomérait les survivants sur une seule pointe de l'île — huit
-      // huttes empilées se lisaient comme un rocher difforme, pas un
-      // campement. Répartir les slots régulièrement autour de l'ellipse
-      // (avec un jitter propre au seed) éparpille les poses le long des
-      // arcs libres, des deux côtés du parvis.
-      const theta = ((slot + roll(seed, 47)) / count) * Math.PI * 2;
-      // Bande radiale large (0,7 → 1) : à bande étroite, les survivants d'un
-      // même arc libre se chevauchaient en un seul bloc difforme.
-      const kr = ISLAND_PLATEAU_K * (0.7 + 0.3 * roll(seed, 53));
-      const sx = island.x + Math.cos(theta) * island.rx * kr;
-      const sz = island.z + Math.sin(theta) * island.rz * kr;
-      if (insideMonumentFootprint(sx, sz) || insideRailCorridor(sx, sz)) continue;
-      const jitterYIsl = family === "medieval" ? 0.3 : family === "haussmann" ? 0.09 : 0.18;
-      out.push({
-        x: sx,
-        z: sz,
-        rot: roll(seed, 59) * Math.PI * 2,
-        scale: nominalScale,
-        scaleY: nominalScale * (1 - jitterYIsl / 2 + roll(seed, 37) * jitterYIsl),
-        archetype,
-        tint: Math.floor(roll(seed, 43) * 4) % 4,
-        family,
-        born,
-        seed,
-      });
-      continue;
-    }
 
     // Cherche une arête où ce bâtiment rentre : l'arête visée par le
     // round-robin d'abord, puis les 3 autres dans l'ordre — à taille
@@ -737,8 +706,8 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
     // autour des îles, des maisons se posaient sur l'eau. On saute la pose si
     // son emprise (demi-diagonale, quel que soit le yaw) mord sur l'eau. Même
     // sémantique de curseur que le skip de monument ci-dessous : l'arête garde
-    // le vide. (Les cellules d'île ne passent pas ici — voir la pose dispersée
-    // plus haut.)
+    // le vide. (Les cellules d'île ne passent jamais ici : isBuildableCell les
+    // exclut, leur tissu vit dans placeIslandTissue.)
     if (isOverSeineWater(wx, wz, Math.hypot((spec.w * scale) / 2, depth))) {
       continue;
     }
@@ -763,6 +732,141 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
       family,
       born,
       seed,
+    });
+  }
+  return out;
+}
+
+// ============================================================================
+// Tissu insulaire — la Cité et Saint-Louis, hors grille
+// ============================================================================
+//
+// Les deux îles permanentes sont plus petites que 2×2 cellules (Cité : 24×10
+// pour des cellules de 8) : l'îlot périmétrique de `placeCell` y déborde
+// structurellement dans le fleuve (8 huttes gauloises sur 10 dans le lit
+// creusé, constat post-remodelage de la Seine), et un semis aléatoire y
+// empile les poses (constat en -250). Les îles ont donc leur propre pose :
+// des « pads » équidistants en abscisse curviligne le long de la couronne du
+// plateau sec, plus une rangée axiale intérieure — l'espacement est garanti
+// par construction, les emprises de monuments creusent le parvis (le duo
+// documenté de MONUMENT_FOOTPRINTS : « la cathédrale garde son parvis net
+// *et* l'île garde ses maisons blotties autour »), et chaque pad reconstruit
+// à CHAQUE époque (`fullRebuild`) : pas de hutte gauloise attardée au pied du
+// temple romain.
+
+// Pas curviligne entre deux pads. Les huttes font ~1,2-1,6 de large, les
+// familles les plus larges (classique/haussmann) jusqu'à ~2,9 : à 2,4 moins
+// le jitter d'arc (±10%), deux voisines larges peuvent tout juste se toucher
+// — des murs mitoyens, comme dans le tissu de la grille, jamais un empilement.
+const ISLAND_PAD_SPACING = 2.4;
+// Distance minimale entre DEUX pads quelconques (couronne comprise, et
+// surtout couronne ↔ rangée axiale, dont la géométrie ne partage pas de pas
+// commun) : tout pad plus proche que ça d'un pad déjà accepté est abandonné.
+const ISLAND_PAD_MIN_DIST = 1.9;
+// Fraction du plateau (ISLAND_PLATEAU_K) où vit la couronne : au ras du bord
+// — c'est là que les arcs hors emprise de Notre-Dame sont les plus longs, et
+// le talus descend assez doucement (smoothstep) pour qu'un léger surplomb
+// d'emprise reste à sec.
+const ISLAND_RIM_KR = 0.97;
+// Étendue (fraction du plateau) de la rangée axiale intérieure : bornée pour
+// ne pas venir toucher la couronne aux deux pointes.
+const ISLAND_AXIS_KR = 0.6;
+
+/**
+ * Pose le tissu d'une île permanente : couronne équidistante en abscisse
+ * curviligne (une équirépartition en *angle* tasserait les pads aux deux
+ * pointes de l'ellipse, où |r'(t)| est minimal — précisément les arcs libres
+ * hors emprises) + rangée axiale intérieure (lisible sur Saint-Louis ; sur la
+ * Cité elle tombe dans l'emprise de Notre-Dame et se filtre toute seule).
+ * Purement déterministe, même contrat de sortie que `placeCell`, plus
+ * `fullRebuild: true` (voir `fabricHistoryAt`).
+ * @param {{x:number,z:number,rx:number,rz:number}} isl
+ * @param {number} islandIndex - rang de l'île (namespace de graines)
+ * @param {number} year - année du tissu rendu (YEAR_MAX à l'init)
+ * @param {number} uYear - urbanYear du centre de l'île
+ * @param {number} density - densityAt du centre de l'île
+ * @param {boolean} insideRing - dans l'enceinte de Thiers
+ * @returns {Array<{x:number,z:number,rot:number,scale:number,scaleY:number,
+ *   archetype:number,tint:number,family:string,born:number,seed:number,
+ *   fullRebuild:boolean}>}
+ */
+export function placeIslandTissue(isl, islandIndex, year, uYear, density, insideRing) {
+  const K = ISLAND_PLATEAU_K;
+  const pads = [];
+
+  // --- couronne : table d'abscisse curviligne, puis n pads équidistants ----
+  const a = isl.rx * K * ISLAND_RIM_KR;
+  const b = isl.rz * K * ISLAND_RIM_KR;
+  const S = 256;
+  const cum = new Float64Array(S + 1);
+  let px = a;
+  let pz = 0;
+  for (let s = 1; s <= S; s++) {
+    const t = (s / S) * Math.PI * 2;
+    const x = Math.cos(t) * a;
+    const z = Math.sin(t) * b;
+    cum[s] = cum[s - 1] + Math.hypot(x - px, z - pz);
+    px = x;
+    pz = z;
+  }
+  const total = cum[S];
+  const n = Math.max(4, Math.round(total / ISLAND_PAD_SPACING));
+  for (let i = 0; i < n; i++) {
+    const seed = seedOf(9700 + islandIndex, 0, i);
+    // Jitter d'arc borné à ±10% du pas : l'espacement minimal entre deux pads
+    // voisins reste 80% du pas, la garantie anti-empilement de tout ce tissu.
+    const sTarget = ((i + 0.5 + (roll(seed, 47) - 0.5) * 0.2) / n) * total;
+    let s = 1;
+    while (s < S && cum[s] < sTarget) s++;
+    const f = (sTarget - cum[s - 1]) / (cum[s] - cum[s - 1] || 1);
+    const t = ((s - 1 + f) / S) * Math.PI * 2;
+    const kr = 1 + (roll(seed, 53) - 0.5) * 0.08;
+    pads.push({ x: isl.x + Math.cos(t) * a * kr, z: isl.z + Math.sin(t) * b * kr, seed });
+  }
+
+  // --- rangée axiale intérieure ---------------------------------------------
+  // Posée APRÈS la couronne : le filtre de distance minimale ci-dessous donne
+  // la priorité aux pads déjà acceptés, donc la rangée cède le passage à la
+  // couronne (sur Saint-Louis, étroite, elles peuvent se frôler).
+  const xMax = isl.rx * K * ISLAND_AXIS_KR;
+  const nAxis = Math.floor((xMax * 2) / ISLAND_PAD_SPACING) + 1;
+  for (let i = 0; i < nAxis; i++) {
+    const seed = seedOf(9700 + islandIndex, 1, i);
+    const x = nAxis === 1 ? 0 : -xMax + (i / (nAxis - 1)) * xMax * 2;
+    pads.push({ x: isl.x + x, z: isl.z + (roll(seed, 47) - 0.5) * 0.4, seed });
+  }
+
+  // --- habillage des pads survivants ----------------------------------------
+  const out = [];
+  const accepted = [];
+  for (const pad of pads) {
+    if (insideMonumentFootprint(pad.x, pad.z) || insideRailCorridor(pad.x, pad.z)) continue;
+    let crowded = false;
+    for (const a of accepted) {
+      if (Math.hypot(pad.x - a.x, pad.z - a.z) < ISLAND_PAD_MIN_DIST) {
+        crowded = true;
+        break;
+      }
+    }
+    if (crowded) continue;
+    accepted.push(pad);
+    const seed = pad.seed;
+    const { family, born } = fabricAt(uYear, year, density, insideRing, seed, true);
+    const archetype = pickArchetype(ARCHETYPES_BY_FAMILY[family], seed);
+    const scale = 1.0 + roll(seed, 31) * (family === "haussmann" ? 0.2 : 0.32);
+    const jitterY = family === "medieval" ? 0.3 : family === "haussmann" ? 0.09 : 0.18;
+    out.push({
+      x: pad.x,
+      z: pad.z,
+      rot: roll(seed, 59) * Math.PI * 2,
+      scale,
+      scaleY: scale * (1 - jitterY / 2 + roll(seed, 37) * jitterY),
+      archetype,
+      tint: Math.floor(roll(seed, 43) * 4) % 4,
+      family,
+      born,
+      seed,
+      fullRebuild: true,
     });
   }
   return out;
@@ -882,7 +986,14 @@ function districtOf(ix, iz) {
  * @returns {Array<object>} une ou plusieurs "lignes" prêtes pour B
  */
 function expandHistory(p, density, insideRing) {
-  const history = fabricHistoryAt(p.uYear, density, insideRing, p.seed);
+  const history = fabricHistoryAt(
+    p.uYear,
+    density,
+    insideRing,
+    p.seed,
+    YEAR_MAX,
+    p.fullRebuild === true
+  );
   const rows = [];
   for (let s = 0; s < history.length; s++) {
     const stage = history[s];
@@ -971,6 +1082,27 @@ function generate() {
       }
     }
   }
+
+  // Le tissu insulaire vit hors grille (les cellules d'île sont exclues de
+  // isBuildableCell) : les deux îles permanentes reçoivent leur propre pose
+  // espacée — voir placeIslandTissue.
+  [ISLANDS.cite, ISLANDS.saintLouis].forEach((isl, islandIndex) => {
+    const uYear = urbanYear(isl.x, isl.z);
+    const density = densityAt(isl.x, isl.z);
+    const insideRing = insideEllipse(
+      isl.x,
+      isl.z,
+      peripherique.cx,
+      peripherique.cz,
+      peripherique.rx,
+      peripherique.rz
+    );
+    for (const p of placeIslandTissue(isl, islandIndex, YEAR_MAX, uYear, density, insideRing)) {
+      p.uYear = uYear;
+      p.district = districtOf(Math.floor(p.x / CELL), Math.floor(p.z / CELL));
+      for (const row of expandHistory(p, density, insideRing)) raw.push(row);
+    }
+  });
 
   // --- tri par comptage sur la clé (archétype, quartier) --------------------
   const nArch = ARCHETYPES.length;
