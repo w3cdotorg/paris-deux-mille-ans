@@ -443,6 +443,48 @@
   border-radius: 3px;
 }
 
+/* Post-v2 — popover ❓ Aide (mode d'emploi des gestes, ordinateur/tablette).
+   Contenu statique : lignes non cliquables, plus denses que les items de
+   menu, et une largeur plus généreuse pour que les phrases ne cassent pas
+   à chaque mot. max-height + scroll : sur un téléphone en paysage, la carte
+   dépasserait l'écran sinon. */
+
+.pdma-help-popover {
+  min-width: 300px;
+  max-width: min(360px, calc(100vw - 32px));
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  gap: 2px;
+}
+
+.pdma-help-title {
+  padding: 8px 14px 4px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--pdma-cream);
+}
+
+.pdma-help-title + .pdma-help-title,
+.pdma-help-row + .pdma-help-title {
+  margin-top: 8px;
+}
+
+.pdma-help-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pdma-cream);
+  opacity: 0.92;
+}
+
+.pdma-help-row .pdma-popover-emoji {
+  font-size: 17px;
+  flex: none;
+}
+
 /* ============================== Bottom timeline (frise) ================= */
 
 .pdma-timeline {

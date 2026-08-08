@@ -15,6 +15,7 @@ import {
   snapWeatherWeights,
   windowLightProfile,
   eraMaxWindowHeight,
+  windowLightHeight,
   lampEraFactor,
   fireFlicker,
   generateWindowSlots,
@@ -392,8 +393,28 @@ test("eraMaxWindowHeight : monte avec les époques, jamais au-delà du plausible
   for (let i = 1; i < heights.length; i++) {
     assert.ok(heights[i] >= heights[i - 1], `recul à l'indice ${i}`);
   }
-  assert.ok(heights[0] <= 8, "le médiéval reste bas");
-  assert.ok(heights[heights.length - 1] <= 30, "1 unité = 10 m : pas de gratte-ciel");
+  assert.ok(heights[0] <= 8, "le médiéval reste bas (mètres)");
+  assert.ok(heights[heights.length - 1] <= 30, "table en mètres : pas de gratte-ciel");
+});
+
+// Régression « lumières en l'air » (capture 2026-nuit) : la table
+// eraMaxWindowHeight est en MÈTRES ; utilisée telle quelle comme unités monde
+// (1 = 10 m), elle posait des fenêtres jusqu'à 240 m au-dessus des toits
+// (~2,5-3 unités pour le tissu haussmannien). windowLightHeight doit rendre
+// des unités monde, bornées par le faîte réel de l'époque.
+test("windowLightHeight : unités monde, sous le faîte du tissu de l'époque", () => {
+  // 2026 : le plafond de la table (24 m) => 2,4 unités, jamais plus.
+  for (const hFrac of [0, 0.3, 0.69, 0.7, 0.9, 1]) {
+    const h = windowLightHeight(hFrac, 2026);
+    assert.ok(h > 0, `hauteur positive (hFrac=${hFrac})`);
+    assert.ok(h <= 2.4 + 1e-9, `2026 : ${h} unités > 2,4 (240 m volants !)`);
+  }
+  // Médiéval : maisons ~7 m => 0,7 unité max.
+  for (const hFrac of [0, 0.5, 1]) {
+    assert.ok(windowLightHeight(hFrac, 1300) <= 0.7 + 1e-9, "médiéval : sous 7 m");
+  }
+  // 70 % des tirages (étages bas) restent sous ~8 m quel que soit l'époque.
+  assert.ok(windowLightHeight(0.69, 2026) <= 0.8, "étages bas : sous 8 m");
 });
 
 test("lampEraFactor : rien avant les réverbères, plein après le gaz", () => {

@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shouldSpaceTogglePlayback, isFormControlTag, formatYear } from "../src/ui.js";
+import {
+  shouldSpaceTogglePlayback,
+  isFormControlTag,
+  formatYear,
+  HELP_SECTIONS,
+} from "../src/ui.js";
 
 // ============================================================================
 // isFormControlTag — correctif revue post-v1, important n°3 (prédicat
@@ -51,4 +56,33 @@ test("shouldSpaceTogglePlayback : focus sur un <input> (curseur de volume) → n
 test("formatYear : négatif -> 'av. J.-C.', positif -> tel quel", () => {
   assert.equal(formatYear(-250), "250 av. J.-C.");
   assert.equal(formatYear(2026), "2026");
+});
+
+// ============================================================================
+// HELP_SECTIONS — bouton ❓ Aide (demande post-v2 : « je n'avais pas vu le
+// raccourci clic droit ») : le contenu doit couvrir ordinateur ET mobile,
+// et mentionner chaque geste réellement câblé dans controls.js/main.js.
+// ============================================================================
+
+test("HELP_SECTIONS : une section ordinateur et une section tablette/téléphone", () => {
+  assert.equal(HELP_SECTIONS.length, 2);
+  assert.match(HELP_SECTIONS[0].title, /ordinateur/i);
+  assert.match(HELP_SECTIONS[1].title, /tablette|téléphone/i);
+  for (const section of HELP_SECTIONS) {
+    assert.ok(section.rows.length >= 3, `${section.title} : au moins 3 gestes`);
+    for (const row of section.rows) {
+      assert.ok(row.emoji, "chaque ligne a un emoji");
+      assert.ok(row.text.length > 0, "chaque ligne a un texte");
+    }
+  }
+});
+
+test("HELP_SECTIONS : les gestes câblés y sont tous (clic droit, molette, ZQSD, pincer)", () => {
+  const desktop = HELP_SECTIONS[0].rows.map((r) => r.text).join(" | ");
+  const mobile = HELP_SECTIONS[1].rows.map((r) => r.text).join(" | ");
+  assert.match(desktop, /clic droit/i, "le raccourci clic droit — l'origine de la demande");
+  assert.match(desktop, /molette/i);
+  assert.match(desktop, /ZQSD/i);
+  assert.match(mobile, /pincer/i);
+  assert.match(mobile, /2 doigts/i);
 });

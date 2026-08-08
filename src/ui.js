@@ -39,6 +39,33 @@ const PRESET_ITEMS = [
   { value: "eiffel", emoji: "🗼", label: "La Tour Eiffel" },
 ];
 
+// Bouton ❓ Aide (post-v2 : « je n'avais pas vu le raccourci clic droit ») —
+// le mode d'emploi des gestes, séparé ordinateur / tablette. Exporté pour
+// les tests : chaque ligne doit refléter un geste réellement câblé dans
+// controls.js (drags, molette, ZQSD, pincer) ou main.js (flèches, 1-4).
+export const HELP_SECTIONS = [
+  {
+    emoji: "🖥️",
+    title: "Sur ordinateur",
+    rows: [
+      { emoji: "🖱️", text: "Glisser (clic gauche) : tourner autour du point regardé" },
+      { emoji: "✋", text: "Glisser (clic droit) : déplacer la vue" },
+      { emoji: "🖲️", text: "Molette : zoomer" },
+      { emoji: "⌨️", text: "ZQSD (ou WASD) : se promener" },
+      { emoji: "⏭️", text: "Flèches ← → : changer d'année · touches 1-4 : les vues" },
+    ],
+  },
+  {
+    emoji: "📱",
+    title: "Sur tablette ou téléphone",
+    rows: [
+      { emoji: "☝️", text: "1 doigt : tourner autour du point regardé" },
+      { emoji: "✌️", text: "2 doigts : déplacer la vue" },
+      { emoji: "🤏", text: "Pincer : zoomer" },
+    ],
+  },
+];
+
 function clamp(v, min, max) {
   return v < min ? min : v > max ? max : v;
 }
@@ -218,6 +245,39 @@ function createVolumePopover({ sliderLabel, sliderValue, onToggle, onSlide }) {
   return { pop, toggleBtn, toggleEmoji, toggleText, slider };
 }
 
+/**
+ * Popover du bouton ❓ Aide : contenu STATIQUE (aucun item sélectionnable,
+ * contrairement à createPopover) — deux sections titrées (ordinateur /
+ * tablette) dont les lignes emoji + texte viennent de HELP_SECTIONS.
+ * Même carte frostée que les autres popovers, fermée par les mêmes chemins
+ * (re-clic sur ❓, clic ailleurs, autre popover ouvert).
+ */
+function createHelpPopover() {
+  const pop = document.createElement("div");
+  pop.className = "pdma-popover pdma-help-popover";
+  pop.setAttribute("role", "note");
+  pop.setAttribute("aria-label", "Comment se déplacer");
+  for (const section of HELP_SECTIONS) {
+    const title = document.createElement("div");
+    title.className = "pdma-help-title";
+    title.textContent = `${section.emoji} ${section.title}`;
+    pop.appendChild(title);
+    for (const row of section.rows) {
+      const line = document.createElement("div");
+      line.className = "pdma-help-row";
+      const emojiSpan = document.createElement("span");
+      emojiSpan.className = "pdma-popover-emoji";
+      emojiSpan.textContent = row.emoji;
+      const textSpan = document.createElement("span");
+      textSpan.textContent = row.text;
+      line.appendChild(emojiSpan);
+      line.appendChild(textSpan);
+      pop.appendChild(line);
+    }
+  }
+  return pop;
+}
+
 function closePopovers() {
   if (openPopover) {
     openPopover.classList.remove("pdma-open");
@@ -333,12 +393,21 @@ function buildDOM() {
   qualityWrap.appendChild(qualityPopover);
   qualityBtn.addEventListener("click", () => togglePopover(qualityPopover));
 
+  const helpWrap = document.createElement("div");
+  helpWrap.className = "pdma-btn-wrap";
+  const helpBtn = createIconButton("❓", "Aide : comment se déplacer");
+  const helpPopover = createHelpPopover();
+  helpWrap.appendChild(helpBtn);
+  helpWrap.appendChild(helpPopover);
+  helpBtn.addEventListener("click", () => togglePopover(helpPopover));
+
   buttonsRow.appendChild(viewsWrap);
   buttonsRow.appendChild(voiceWrap);
   buttonsRow.appendChild(soundWrap);
   buttonsRow.appendChild(landmarksBtn);
   buttonsRow.appendChild(weatherBtn);
   buttonsRow.appendChild(zonesBtn);
+  buttonsRow.appendChild(helpWrap);
   buttonsRow.appendChild(qualityWrap);
   root.appendChild(buttonsRow);
 

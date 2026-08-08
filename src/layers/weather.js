@@ -849,12 +849,15 @@ export function windowLightProfile(year, outColor = { r: 0, g: 0, b: 0 }) {
 }
 
 /**
- * Hauteur maximale (unités monde, 1 = 10 m) à laquelle poser une fenêtre à
- * cette époque. Approximation assumée : la couche ne lit pas la hauteur réelle
+ * Hauteur maximale — en MÈTRES — à laquelle poser une fenêtre à cette
+ * époque. Approximation assumée : la couche ne lit pas la hauteur réelle
  * de chaque bâtiment instancié — elle place des points lumineux dans la
  * tranche de hauteur *plausible* du tissu de l'époque (voir rapport).
+ * Toujours convertir en unités monde (÷ 10) avant de positionner : utilisée
+ * telle quelle, la table posait des fenêtres à 240 m au-dessus des toits
+ * (bug « lumières en l'air », capture 2026-nuit).
  * @param {number} year
- * @returns {number}
+ * @returns {number} mètres
  */
 export function eraMaxWindowHeight(year) {
   if (year < 1600) return 7;
@@ -862,6 +865,23 @@ export function eraMaxWindowHeight(year) {
   if (year < 1900) return 18; // haussmannien
   if (year < 1960) return 20;
   return 24;
+}
+
+/**
+ * Hauteur (unités monde, 1 = 10 m) d'une fenêtre allumée pour un tirage
+ * `hFrac` ∈ [0,1] à `year`. 70 % des fenêtres dans les étages bas (1,6-7,6 m),
+ * 30 % réparties jusqu'au faîte plausible de l'époque (eraMaxWindowHeight,
+ * en mètres) — le tout ramené en unités monde, pour que les points restent
+ * DANS le tissu bâti (~2,5-3 unités au faîte haussmannien) au lieu de
+ * flotter au-dessus des toits.
+ * @param {number} hFrac tirage déterministe [0,1]
+ * @param {number} year
+ * @returns {number} unités monde au-dessus du sol
+ */
+export function windowLightHeight(hFrac, year) {
+  const maxMeters = eraMaxWindowHeight(year);
+  const meters = hFrac < 0.7 ? 1.6 + hFrac * 6 : 4 + hFrac * (maxMeters - 4);
+  return meters / 10;
 }
 
 /**
@@ -1342,7 +1362,6 @@ function repositionWindows(year, cx, cz) {
   windows.slots = slots;
 
   const profile = windowLightProfile(year, _windowColor);
-  const maxH = eraMaxWindowHeight(year);
   const positions = windows.positions;
   const colors = windows.colors;
 
@@ -1351,8 +1370,8 @@ function repositionWindows(year, cx, cz) {
     const s = slots[i];
     if (s.rank >= profile.litFraction) continue;
     // 70 % des fenêtres dans les étages bas, 30 % réparties jusqu'au faîte
-    // plausible de l'époque (voir eraMaxWindowHeight pour l'approximation).
-    const h = s.hFrac < 0.7 ? 1.6 + s.hFrac * 6 : 4 + s.hFrac * (maxH - 4);
+    // plausible de l'époque — en unités monde (voir windowLightHeight).
+    const h = windowLightHeight(s.hFrac, year);
     positions[n * 3 + 0] = s.x;
     positions[n * 3 + 1] = groundHeightAt(s.x, s.z) + h;
     positions[n * 3 + 2] = s.z;
