@@ -45,6 +45,8 @@ import * as THREE from "three";
 import {
   urbanYear,
   isOverSeineWater,
+  permanentIslandAt,
+  ISLAND_PLATEAU_K,
   RINGS,
   LANDMARKS,
   insideMonumentFootprint,
@@ -550,6 +552,9 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
   const cellRot = streetOrientation(ix, iz);
   const cosR = Math.cos(cellRot);
   const sinR = Math.sin(cellRot);
+  // Cellule d'île ? Le tissu insulaire est posé en dispersion sur le plateau
+  // sec, pas en îlot périmétrique — voir la branche `island` dans la boucle.
+  const island = permanentIslandAt(cx, cz);
   const out = [];
 
   // Empaquetage contigu par arête (review Critical 1a) : chaque arête a son
@@ -613,6 +618,50 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
     // interstices sans toucher le nombre d'instances (donc sans coût de perf).
     const nominalScale = 1.0 + roll(seed, 31) * (family === "haussmann" ? 0.2 : 0.32);
     const alongNominal = pickedSpec.w * nominalScale;
+
+    // Cellule d'île : pas d'îlot périmétrique. isBuildableCell ne valide que
+    // le *centre* de la cellule, or les façades s'étalent jusqu'à ~4 unités —
+    // sur une île à peine plus grande qu'une cellule (Cité : 24×10), la pose
+    // en périmètre déposait 8 huttes gauloises sur 10 dans le lit creusé du
+    // fleuve (régression constatée après le remodelage de la Seine ; idem pour
+    // les maisons de la Cité aux époques suivantes). À la place : un tissu
+    // blotti, dispersé par seed sur la couronne externe du plateau *sec*
+    // (kr ≤ ISLAND_PLATEAU_K — au-delà, le talus plonge sous le plan d'eau).
+    // Les emprises de monuments continuent de creuser le parvis : c'est le
+    // duo documenté dans la note MONUMENT_FOOTPRINTS de geography.js — « la
+    // cathédrale garde son parvis net *et* l'île garde ses maisons blotties
+    // autour ». Les poses qui tombent dans une emprise sont simplement
+    // abandonnées : la couronne libre (est/ouest du parvis) en absorbe ~8 sur
+    // la Cité, la capacité réelle de ses arcs.
+    if (island) {
+      // Angle stratifié par slot (pas un tirage uniforme) : un hasard pur
+      // agglomérait les survivants sur une seule pointe de l'île — huit
+      // huttes empilées se lisaient comme un rocher difforme, pas un
+      // campement. Répartir les slots régulièrement autour de l'ellipse
+      // (avec un jitter propre au seed) éparpille les poses le long des
+      // arcs libres, des deux côtés du parvis.
+      const theta = ((slot + roll(seed, 47)) / count) * Math.PI * 2;
+      // Bande radiale large (0,7 → 1) : à bande étroite, les survivants d'un
+      // même arc libre se chevauchaient en un seul bloc difforme.
+      const kr = ISLAND_PLATEAU_K * (0.7 + 0.3 * roll(seed, 53));
+      const sx = island.x + Math.cos(theta) * island.rx * kr;
+      const sz = island.z + Math.sin(theta) * island.rz * kr;
+      if (insideMonumentFootprint(sx, sz) || insideRailCorridor(sx, sz)) continue;
+      const jitterYIsl = family === "medieval" ? 0.3 : family === "haussmann" ? 0.09 : 0.18;
+      out.push({
+        x: sx,
+        z: sz,
+        rot: roll(seed, 59) * Math.PI * 2,
+        scale: nominalScale,
+        scaleY: nominalScale * (1 - jitterYIsl / 2 + roll(seed, 37) * jitterYIsl),
+        archetype,
+        tint: Math.floor(roll(seed, 43) * 4) % 4,
+        family,
+        born,
+        seed,
+      });
+      continue;
+    }
 
     // Cherche une arête où ce bâtiment rentre : l'arête visée par le
     // round-robin d'abord, puis les 3 autres dans l'ordre — à taille
@@ -682,6 +731,17 @@ export function placeCell(ix, iz, uYear, year, density, insideRing) {
 
     const wx = cx + lx * cosR - lz * sinR;
     const wz = cz + lx * sinR + lz * cosR;
+    // Le bâti de berge reste au sec (régression post-remodelage Seine) : la
+    // cellule est validée par son *centre* (isBuildableCell, marge 2), mais la
+    // pose s'étale jusqu'à ~4 unités — dans le lit élargi à 12 de demi-largeur
+    // autour des îles, des maisons se posaient sur l'eau. On saute la pose si
+    // son emprise (demi-diagonale, quel que soit le yaw) mord sur l'eau. Même
+    // sémantique de curseur que le skip de monument ci-dessous : l'arête garde
+    // le vide. (Les cellules d'île ne passent pas ici — voir la pose dispersée
+    // plus haut.)
+    if (isOverSeineWater(wx, wz, Math.hypot((spec.w * scale) / 2, depth))) {
+      continue;
+    }
     // Emprise d'un monument (tâche 10) : on saute *ce* bâtiment sans toucher au
     // curseur d'arête déjà avancé — la cellule garde donc ses autres maisons et
     // il se creuse juste un vide là où se dresse le monument. Indispensable sur

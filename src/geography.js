@@ -358,21 +358,44 @@ export const ISLANDS = {
 const PERMANENT_ISLANDS = [ISLANDS.cite, ISLANDS.saintLouis];
 
 /**
+ * Fraction du rayon normalisé d'une île qui est du **plateau sec** : en deçà,
+ * le sol rendu est plat, au franc-bord plein ; au-delà commence le talus de
+ * rive, qui plonge sous le plan d'eau vers k = 1 (voir `islandProfile` dans
+ * terrain.js, qui importe cette constante). C'est donc la limite géométrique
+ * de « où l'on peut poser quelque chose sans qu'il ait les pieds dans l'eau »,
+ * partagée par le maillage des îles (terrain.js) et la pose dispersée du bâti
+ * insulaire (buildings.js, branche `island` de `placeCell`).
+ */
+export const ISLAND_PLATEAU_K = 0.82;
+
+/**
+ * L'île permanente (Cité ou Saint-Louis) dont la terre ferme contient (x, z),
+ * ou `null`. Louviers en est volontairement exclue (bras mort + disparition
+ * en 1843, cf. ISLANDS).
+ * @param {number} x
+ * @param {number} z
+ * @returns {{x:number,z:number,rx:number,rz:number}|null}
+ */
+export function permanentIslandAt(x, z) {
+  for (const isl of PERMANENT_ISLANDS) {
+    if (insideEllipse(x, z, isl.x, isl.z, isl.rx, isl.rz)) return isl;
+  }
+  return null;
+}
+
+/**
  * Le point (x, z) est-il sur la terre ferme d'une île permanente (Cité ou
  * Saint-Louis) ? Source unique partagée : `buildings.js` s'en sert pour
  * exempter les îles de la marge d'eau, `life.js` pour laisser la foule y
- * marcher, `terrain.js` pour les surélever. Louviers en est volontairement
- * exclue (bras mort + disparition en 1843, cf. ISLANDS).
+ * marcher, `terrain.js` pour les surélever.
  * @param {number} x
  * @param {number} z
  * @returns {boolean}
  */
 export function isOnPermanentIsland(x, z) {
-  for (const isl of PERMANENT_ISLANDS) {
-    if (insideEllipse(x, z, isl.x, isl.z, isl.rx, isl.rz)) return true;
-  }
-  return false;
+  return permanentIslandAt(x, z) !== null;
 }
+
 
 // ============================================================================
 // Largeur de la Seine — le lit s'élargit autour des îles

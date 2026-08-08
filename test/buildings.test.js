@@ -710,3 +710,68 @@ test("debugCounts ground truth: easeOutBack(lifecycle(...).presence) is 0 exactl
     1
   );
 });
+
+// ============================================================================
+// placeCell — le bâti reste au sec (régression post-remodelage Seine) : les
+// cellules sont validées par leur *centre* (isBuildableCell), mais les
+// bâtiments s'étalent jusqu'à ~4 unités du centre. Sur l'île de la Cité
+// (ellipse 24×10, à peine plus grande qu'une cellule de 8), 8 huttes sur 10
+// de -250 tombaient dans le lit creusé du fleuve ; sur les berges, le lit
+// élargi à 12 de demi-largeur autour des îles noyait des maisons dont la
+// cellule restait à bonne distance. Invariant : chaque bâtiment posé est au
+// sec — sur île, sol rendu au-dessus du plan d'eau ; hors île, jamais dans
+// l'emprise de l'eau.
+// ============================================================================
+
+import { groundHeightAt, seineWaterHeightAt } from "../src/layers/terrain.js";
+import { isOverSeineWater, isOnPermanentIsland } from "../src/geography.js";
+
+/** Tous les bâtiments posés par placeCell dans la fenêtre de cellules donnée. */
+function placedInWindow(year, ixMin, ixMax, izMin, izMax) {
+  const out = [];
+  for (let ix = ixMin; ix <= ixMax; ix++) {
+    for (let iz = izMin; iz <= izMax; iz++) {
+      const cx = cellCenterX(ix);
+      const cz = cellCenterZ(iz);
+      const uY = urbanYear(cx, cz);
+      if (!isBuildableCell(cx, cz, uY, year)) continue;
+      out.push(...placeCell(ix, iz, uY, year, densityAt(cx, cz), true));
+    }
+  }
+  return out;
+}
+
+test("placeCell: les huttes de -250 sont toutes au sec sur l'île de la Cité", () => {
+  const placed = placedInWindow(-250, -4, 4, -4, 4);
+  assert.ok(placed.length >= 4, `l'île doit porter un campement, pas ${placed.length} hutte(s)`);
+  for (const b of placed) {
+    const clearance = groundHeightAt(b.x, b.z) - seineWaterHeightAt(b.x, b.z);
+    assert.ok(
+      isOnPermanentIsland(b.x, b.z),
+      `hutte (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) posée hors de l'île, dans le fleuve`
+    );
+    assert.ok(
+      clearance > 0.14,
+      `hutte (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) sous le plan d'eau (dégagement ${clearance.toFixed(2)})`
+    );
+  }
+});
+
+test("placeCell: aucun bâtiment d'aucune époque n'est posé sur l'eau autour des îles", () => {
+  for (const year of [-250, 100, 1300, 1650, 2026]) {
+    for (const b of placedInWindow(year, -12, 12, -12, 12)) {
+      if (isOnPermanentIsland(b.x, b.z)) {
+        const clearance = groundHeightAt(b.x, b.z) - seineWaterHeightAt(b.x, b.z);
+        assert.ok(
+          clearance > 0.14,
+          `an ${year} : bâtiment d'île (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) sous le plan d'eau (dégagement ${clearance.toFixed(2)})`
+        );
+      } else {
+        assert.ok(
+          !isOverSeineWater(b.x, b.z, 0),
+          `an ${year} : bâtiment (${b.x.toFixed(1)}, ${b.z.toFixed(1)}) posé sur l'eau`
+        );
+      }
+    }
+  }
+});

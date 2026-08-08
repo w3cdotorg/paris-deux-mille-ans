@@ -26,6 +26,7 @@ import {
   SEINE_POINTS,
   SEINE_ONMAP_COUNT,
   ISLANDS,
+  ISLAND_PLATEAU_K,
   insideMonumentFootprint,
 } from "../geography.js";
 import { lifecycle, lerp, smoothstep } from "../timeEngine.js";
@@ -101,10 +102,12 @@ const TRANSITION_YEARS = 110;
 // geography.js) — 1,7 est donc l'échelle cohérente, et c'est ce qu'il faut pour
 // que l'île se lise comme une terre habitée et non comme un banc de sable.
 const ISLAND_FREEBOARD = 1.7;
-// Rayon normalisé (ellipse) où commence le talus de berge : plateau plein en
-// deçà, descente jusqu'au niveau du lit à k = 1. Pour la Cité, 0,82 → 1 vaut
-// 0,9 unité en z : un talus franc, qui donne l'arête de rive demandée.
-const ISLAND_PLATEAU_K = 0.82;
+// Le rayon normalisé où commence le talus de berge (plateau plein en deçà,
+// descente jusqu'au niveau du lit à k = 1) est ISLAND_PLATEAU_K, importé de
+// geography.js : le bâti des cellules d'île s'y ancre aussi
+// (`clampToIslandPlateau`), donc la constante vit avec la géométrie partagée.
+// Pour la Cité, 0,82 → 1 vaut 0,9 unité en z : un talus franc, qui donne
+// l'arête de rive demandée.
 // Anneau immergé qui prolonge l'île sous l'eau : garantit qu'aucun interstice
 // n'apparaît entre la rive et le ruban d'eau, quel que soit l'angle de vue.
 const ISLAND_SKIRT_K = 1.06;
